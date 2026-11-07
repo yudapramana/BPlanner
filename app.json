@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "Monthly Budget Planner",
+    "slug": "budget-planner",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": { "package": "com.yuda.budgetplanner" }
+  }
+}
