@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { db, initDb, seedAll } from './db';
+import { exportBackup, shareTemplate, pickAndRead, importCsv } from './backup';
 import { JENIS, MONTHS, rp, pct, ym, GREEN, ORANGE, RED, colorFor, monthData, yearData, highlights, cek } from './calc';
 
 initDb();
@@ -168,8 +169,23 @@ function Kategori({ tick, bump }) {
   };
   const remove = c => Alert.alert('Hapus kategori?', c.nama, [{ text: 'Batal' }, { text: 'Hapus', style: 'destructive', onPress: () => { db.runSync('DELETE FROM categories WHERE id=?', [c.id]); bump(); } }]);
   const reset = () => Alert.alert('Reset / Import Data Awal Excel', 'Semua kategori & transaksi diganti dengan data awal dari Excel.', [{ text: 'Batal' }, { text: 'Reset', style: 'destructive', onPress: () => { seedAll(); bump(); } }]);
+  const runImport = async replace => {
+    try {
+      const text = await pickAndRead(); if (text == null) return;
+      const r = importCsv(text, replace); bump();
+      Alert.alert('Import selesai', `Kategori diproses: ${r.kat} (baru: ${r.katBaru})\nTransaksi masuk: ${r.tx}\nTransaksi kembar dilewati: ${r.dobel}\nBaris tidak valid/dilewati: ${r.lewat}`);
+    } catch (e) { Alert.alert('Import gagal', String(e.message || e)); }
+  };
+  const doImport = () => Alert.alert('Import dari file CSV', 'Gabung: tambahkan data file ke data yang ada (transaksi kembar dilewati).\nGanti Semua: hapus semua data sekarang lalu isi dari file.', [
+    { text: 'Batal', style: 'cancel' }, { text: 'Gabung', onPress: () => runImport(false) }, { text: 'Ganti Semua', style: 'destructive', onPress: () => runImport(true) }]);
   return (
     <ScrollView contentContainerStyle={s.pad} keyboardShouldPersistTaps="handled">
+      <Section title="Backup & Restore Data">
+        <Text style={s.rn}>Export menyimpan semua kategori, anggaran, dan transaksi ke satu file CSV. Simpan file itu (Drive/WhatsApp), lalu Import di HP baru.</Text>
+        <Btn t="⬆ Export Backup (CSV)" onPress={() => exportBackup().catch(e => Alert.alert('Export gagal', String(e.message || e)))} />
+        <Btn t="⬇ Import dari File CSV" color={GREEN} onPress={doImport} />
+        <Btn t="📄 Download Template Import" color="#636e72" onPress={() => shareTemplate().catch(e => Alert.alert('Gagal', String(e.message || e)))} />
+      </Section>
       <Text style={s.cardS}>Ubah nama / anggaran lalu tekan selesai di keyboard. Anggaran berlaku sama untuk semua bulan.</Text>
       {JENIS.map(j => (
         <Section key={j} title={j.toUpperCase()}>
@@ -234,7 +250,7 @@ export default function App() {
   const [tick, setTick] = useState(0);
   const bump = () => setTick(t => t + 1);
   const P = { y, m, setY, setM, tick, bump };
-  const tabs = ['Dashboard', 'Input', 'Kategori', 'Tahunan'];
+  const tabs = ['Dashboard', 'Input', 'Pengaturan', 'Tahunan'];
   return (
     <SafeAreaView style={s.root}>
       <StatusBar style="light" />
