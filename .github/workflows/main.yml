@@ -3,29 +3,51 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Push beruntun ke branch yang sama: batalkan build lama, hanya build terbaru yang jalan
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+
       - name: Cek file proyek
         run: |
           ls -la
-          for f in package.json App.js db.js calc.js app.json babel.config.js; do
+          for f in package.json index.js App.js app.json theme.js \
+                   lib/db.js lib/calc.js lib/backup.js lib/errors.js \
+                   components/ErrorBoundary.js screens/DashboardScreen.js \
+                   tests/helpers/setup.js; do
             test -f "$f" || { echo "::error::File $f tidak ada di akar repo"; exit 1; }
           done
+
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - uses: actions/setup-java@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: 17 }
+
       - run: npm install --no-audit --no-fund
-      - name: Pastikan dependensi Expo lengkap
-        run: npx expo install expo-asset expo-constants
+
+      # Rumus, migrasi, import/backup, Google Drive sync, ErrorBoundary. Gagal = build berhenti sebelum APK dibuat.
+      - name: Jalankan pengujian
+        run: npm test
+
       - name: Uji bundling JS (error asli tampil di sini)
         run: npx expo export --platform android
+
       - run: npx expo prebuild --platform android --no-install
       - run: cd android && chmod +x gradlew && ./gradlew assembleRelease --no-daemon
+
       - uses: actions/upload-artifact@v4
         with:
           name: budget-planner-apk
           path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
