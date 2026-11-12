@@ -12,13 +12,24 @@ jest.mock('@react-native-google-signin/google-signin', () => ({
   GoogleSignin: mockGS, isSuccessResponse: r => r && r.type === 'success', statusCodes: { SIGN_IN_CANCELLED: '12501', IN_PROGRESS: '12502', PLAY_SERVICES_NOT_AVAILABLE: '12503' },
 }), { virtual: true });
 
+// Isi lib/config.js (GOOGLE_WEB_CLIENT_ID cadangan) diganti tiruan: tes tidak boleh bergantung pada ID milik pemilik proyek yang diisi di file itu.
+const mockCfg = { id: '' };
+jest.mock('../lib/config', () => ({ get GOOGLE_WEB_CLIENT_ID() { return mockCfg.id; } }));
+
 const G = require('../lib/googleAuth');
 const ID1 = '1234567890-abcdefg123456.apps.googleusercontent.com';
 const ID2 = '9876543210-zyxwvu654321.apps.googleusercontent.com';
 
-beforeEach(() => { freshDb(); Object.values(mockGS).forEach(f => f.mockClear && f.mockClear()); });
+beforeEach(() => { mockCfg.id = ''; freshDb(); Object.values(mockGS).forEach(f => f.mockClear && f.mockClear()); });
 
 describe('Google Web Client ID diisi lewat aplikasi', () => {
+  test('cadangan di lib/config.js dipakai bila kolom di aplikasi kosong; ID di aplikasi selalu didahulukan; mengosongkan kembali ke cadangan', async () => {
+    mockCfg.id = ID2;
+    expect(G.getWebClientId()).toBe(ID2); expect(G.hasWebClientId()).toBe(true);
+    await G.signInWithGoogle(); expect(mockGS.configure).toHaveBeenLastCalledWith({ webClientId: ID2 });
+    await G.saveWebClientId(ID1); expect(G.getWebClientId()).toBe(ID1);
+    await G.saveWebClientId('   '); expect(G.getWebClientId()).toBe(ID2);
+  });
   test('belum diisi: login ditolak dengan kode NO_CLIENT_ID dan modul native tidak disentuh', async () => {
     expect(G.getWebClientId()).toBe(''); expect(G.hasWebClientId()).toBe(false);
     await expect(G.signInWithGoogle()).rejects.toMatchObject({ code: 'NO_CLIENT_ID' });
