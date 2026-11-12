@@ -1,293 +1,313 @@
-import React, { useState, useMemo } from 'react';
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, StyleSheet, SafeAreaView, Platform, StatusBar as RNStatusBar } from 'react-native';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { View, Text, TouchableOpacity, BackHandler, Alert, AppState } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import * as FileSystem from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
-import { db, initDb, seedAll } from './db';
-import { exportBackup, shareTemplate, pickAndRead, importCsv } from './backup';
-import { JENIS, MONTHS, rp, pct, ym, GREEN, ORANGE, RED, colorFor, monthData, yearData, highlights, cek } from './calc';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { initDb, getBook, setActiveBook, resetAllData } from './lib/db';
+import { s, NAVY, BG } from './theme';
+import DashboardScreen from './screens/DashboardScreen';
+import TransaksiScreen from './screens/TransaksiScreen';
+import PengaturanScreen from './screens/PengaturanScreen';
+import NavIcon from './components/NavIcons';
+import BookSheet, { BookAvatar } from './components/BookSheet';
+import ExpensesScreen from './screens/ExpensesScreen';
+import TransaksiFormScreen from './screens/TransaksiFormScreen';
+import ProfileScreen from './screens/ProfileScreen';
+import WelcomeScreen from './screens/WelcomeScreen';
+import Avatar from './components/Avatar';
+import { getProfile, saveGoogleProfile, renameProfile, clearProfile, welcomeDone, setWelcomeDone } from './lib/auth';
+import { signInWithGoogle, signOutGoogle, authMessage, getDriveToken, sessionActive, hasWebClientId } from './lib/googleAuth';
+import { loginSync, autoSync, syncNow, beforeLogout, syncStatus } from './lib/driveSync';
+import { autoBackup, clearAutoBackups } from './lib/backup';
+import ClientIdSheet from './components/ClientIdSheet';
+import { fmtWaktu } from './components/DriveSheet';
+import BerulangScreen from './screens/BerulangScreen';
+import { processRecurring } from './lib/recurring';
+import { initNotifications, syncReminders, onReminderTap } from './lib/reminders';
+import ErrorBoundary, { ErrorFallback } from './components/ErrorBoundary';
+import { reportError } from './lib/errors';
 
-initDb();
-const NAVY = '#14365d', BG = '#f3f6fa';
-const GCOL = { Pendapatan: '#2e9e5b', Biaya: '#e17055', Tagihan: '#0984e3', Pinjaman: '#6c5ce7', 'Investasi/Tabungan': '#00b894' };
+// Gagal membuka / memigrasi database tidak boleh membuat aplikasi mati tanpa penjelasan. Migrasi berjalan dalam transaksi,
+// jadi bila gagal data lama tetap utuh; aplikasi menampilkan layar kesalahan dan tidak memuat layar lain (yang butuh tabel-tabelnya).
+let bootError = null;
+try { initDb(); } catch (e) { bootError = e; reportError('initDb', e); }
+try { initNotifications(); } catch (e) { reportError('initNotifications', e); } // pengingat saja yang mati
 
-async function exportCsv(name, rows) {
-  const csv = '\uFEFF' + rows.map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
-  const uri = FileSystem.cacheDirectory + name;
-  await FileSystem.writeAsStringAsync(uri, csv);
-  if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'text/csv', dialogTitle: name });
-  else Alert.alert('Tersimpan', uri);
-}
+const AUTO_DELAY_MS = 45000; // sinkron otomatis berjalan 45 detik setelah perubahan terakhir (debounce)
+const firstLine = e => String((e && e.message) || e || '').split('\n')[0];
 
-const Card = ({ title, value, sub, color }) => (
-  <View style={[s.card, { borderLeftColor: color || NAVY }]}>
-    <Text style={s.cardT}>{title}</Text>
-    <Text style={[s.cardV, color && { color }]}>{value}</Text>
-    {sub ? <Text style={s.cardS}>{sub}</Text> : null}
-  </View>
-);
-const Btn = ({ t, onPress, color, small }) => (
-  <TouchableOpacity onPress={onPress} style={[s.btn, { backgroundColor: color || NAVY }, small && { paddingVertical: 6 }]}><Text style={s.btnT}>{t}</Text></TouchableOpacity>
-);
-const Chips = ({ items, value, onPick }) => (
-  <View style={s.chips}>{items.map(i => (
-    <TouchableOpacity key={i} onPress={() => onPick(i)} style={[s.chip, value === i && { backgroundColor: NAVY }]}>
-      <Text style={[s.chipT, value === i && { color: '#fff' }]}>{i}</Text>
-    </TouchableOpacity>))}</View>
-);
-const Prog = ({ jenis, r }) => {
-  const c = colorFor(jenis, r.budget, r.real);
-  const w = Math.min(100, (r.budget > 0 ? r.real / r.budget : r.real > 0 ? 1 : 0) * 100);
-  return (
-    <View style={{ marginBottom: 8 }}>
-      <View style={s.row}><Text style={s.rn}>{r.nama}</Text><Text style={s.rv}>{rp(r.real)} / {rp(r.budget)}  ({pct(r.p)})</Text></View>
-      <View style={s.track}><View style={{ width: w + '%', height: 8, backgroundColor: c, borderRadius: 4 }} /></View>
-    </View>
-  );
-};
-const Section = ({ title, children }) => (<View style={s.sec}><Text style={s.secT}>{title}</Text>{children}</View>);
+const TABS = [['Dashboard', 'dashboard', DashboardScreen], ['Transaksi', 'transaksi', TransaksiScreen], ['Anggaran', 'anggaran', PengaturanScreen], ['Pengeluaran', 'pengeluaran', ExpensesScreen]];
 
-function MonthPicker({ y, m, setY, setM }) {
-  const step = d => { let nm = m + d, ny = y; if (nm < 1) { nm = 12; ny--; } if (nm > 12) { nm = 1; ny++; } setM(nm); setY(ny); };
-  return (
-    <View style={s.mp}>
-      <TouchableOpacity onPress={() => step(-1)}><Text style={s.mpA}>◀</Text></TouchableOpacity>
-      <Text style={s.mpT}>{MONTHS[m - 1]} {y}</Text>
-      <TouchableOpacity onPress={() => step(1)}><Text style={s.mpA}>▶</Text></TouchableOpacity>
-    </View>
-  );
-}
-
-function Dashboard({ y, m, setY, setM, tick }) {
-  const D = useMemo(() => monthData(y, m), [y, m, tick]);
-  const { d } = D;
-  const bt = { budget: d.Biaya.budget + d.Tagihan.budget, real: d.Biaya.real + d.Tagihan.real };
-  const alloc = [['Biaya', d.Biaya.real], ['Tagihan', d.Tagihan.real], ['Pinjaman', d.Pinjaman.real], ['Investasi/Tabungan', d['Investasi/Tabungan'].real], ['Saldo', Math.max(D.saldo, 0)]];
-  const atot = alloc.reduce((a, x) => a + x[1], 0) || 1;
-  const bars = [['Pendapatan', d.Pendapatan], ['Biaya+Tagihan', bt], ['Pinjaman', d.Pinjaman], ['Tabungan', d['Investasi/Tabungan']]];
-  const bmax = Math.max(1, ...bars.map(b => Math.max(b[1].budget, b[1].real)));
-  const doExport = () => exportCsv(`Dashboard_${ym(y, m)}.csv`, [
-    ['Kelompok', 'Kategori', 'Anggaran', 'Realisasi', '%'],
-    ...JENIS.flatMap(j => d[j].rows.map(r => [j, r.nama, r.budget, r.real, pct(r.p)])),
-    [], ['Saldo Bulan Ini', D.saldo], ['Status', D.surplus ? 'SURPLUS' : 'DEFISIT'], ['Tingkat Tabungan', pct(D.tabungan)], ['Pengeluaran Terpakai', pct(D.terpakai)]]);
-  return (
-    <ScrollView contentContainerStyle={s.pad}>
-      <MonthPicker {...{ y, m, setY, setM }} />
-      <Card title="PENDAPATAN" value={rp(d.Pendapatan.real)} sub={'Anggaran ' + rp(d.Pendapatan.budget)} color={GCOL.Pendapatan} />
-      <Card title="BIAYA & TAGIHAN" value={rp(bt.real)} sub={'Anggaran ' + rp(bt.budget)} color={GCOL.Biaya} />
-      <Card title="BAYAR PINJAMAN" value={rp(d.Pinjaman.real)} sub={'Anggaran ' + rp(d.Pinjaman.budget)} color={GCOL.Pinjaman} />
-      <Card title="TABUNGAN & INVESTASI" value={rp(d['Investasi/Tabungan'].real)} sub={'Anggaran ' + rp(d['Investasi/Tabungan'].budget)} color={GCOL['Investasi/Tabungan']} />
-      <Card title="SALDO BULAN INI" value={rp(D.saldo)} sub={'Rencana ' + rp(D.saldoPlan)} color={D.surplus ? GREEN : RED} />
-      <Card title="STATUS KEUANGAN" value={D.surplus ? '▲ SURPLUS (PLUS)' : '▼ DEFISIT (MINUS)'} color={D.surplus ? GREEN : RED} />
-      <Card title="TINGKAT TABUNGAN" value={pct(D.tabungan)} sub="Tabungan ÷ Pendapatan" />
-      <Card title="PENGELUARAN TERPAKAI" value={pct(D.terpakai)} sub="(Biaya+Tagihan+Pinjaman) ÷ Anggarannya" />
-      <Section title="Alokasi Dana (realisasi)">
-        <View style={s.stack}>{alloc.map(([k, v]) => <View key={k} style={{ flex: v / atot, backgroundColor: GCOL[k] || '#b2bec3' }} />)}</View>
-        {alloc.map(([k, v]) => <Text key={k} style={s.leg}><Text style={{ color: GCOL[k] || '#b2bec3' }}>■ </Text>{k}: {rp(v)} ({pct(v / atot)})</Text>)}
-      </Section>
-      <Section title="Anggaran vs Realisasi">
-        {bars.map(([k, v]) => (
-          <View key={k} style={{ marginBottom: 8 }}>
-            <Text style={s.rn}>{k}</Text>
-            <View style={{ height: 10, width: (v.budget / bmax) * 100 + '%', backgroundColor: '#b2bec3', marginTop: 2 }} />
-            <View style={{ height: 10, width: (v.real / bmax) * 100 + '%', backgroundColor: NAVY, marginTop: 2 }} />
-          </View>))}
-        <Text style={s.leg}>■ abu = anggaran   ■ biru = realisasi</Text>
-      </Section>
-      <Section title="Ringkasan Arus Kas">
-        <Text style={s.rn}>Pendapatan {rp(d.Pendapatan.real)}</Text>
-        <Text style={s.rn}>− Biaya {rp(d.Biaya.real)}  − Tagihan {rp(d.Tagihan.real)}</Text>
-        <Text style={s.rn}>− Pinjaman {rp(d.Pinjaman.real)}  − Tabungan {rp(d['Investasi/Tabungan'].real)}</Text>
-        <Text style={[s.rn, { fontWeight: '700', color: D.surplus ? GREEN : RED }]}>= Saldo {rp(D.saldo)}</Text>
-      </Section>
-      {[['Pendapatan', 'Pendapatan'], ['Biaya', 'Biaya'], ['Tagihan', 'Pelacak Tagihan'], ['Pinjaman', 'Pelacak Pinjaman'], ['Investasi/Tabungan', 'Tabungan & Investasi']].map(([j, t]) => (
-        <Section key={j} title={t}>{d[j].rows.map(r => <Prog key={r.nama} jenis={j} r={r} />)}
-          <Text style={[s.rn, { fontWeight: '700' }]}>TOTAL {rp(d[j].real)} / {rp(d[j].budget)}</Text></Section>))}
-      <Btn t="Export laporan (CSV)" onPress={doExport} />
-    </ScrollView>
-  );
-}
-
-function Input({ y, m, setY, setM, tick, bump }) {
-  const blank = { id: null, tanggal: ym(y, m) + '-01', jenis: 'Biaya', kategori: '', nominal: '', ket: '' };
-  const [f, setF] = useState(blank);
-  const cats = useMemo(() => db.getAllSync('SELECT * FROM categories ORDER BY urut,id'), [tick]);
-  const list = useMemo(() => db.getAllSync('SELECT * FROM transactions WHERE substr(tanggal,1,7)=? ORDER BY tanggal DESC,id DESC', [ym(y, m)]), [y, m, tick]);
-  const opts = cats.filter(c => c.jenis === f.jenis).map(c => c.nama);
-  const save = () => {
-    const nom = parseInt(String(f.nominal).replace(/\D/g, ''), 10) || 0;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(f.tanggal)) return Alert.alert('Format tanggal', 'Gunakan YYYY-MM-DD');
-    if (!f.kategori || !nom) return Alert.alert('Belum lengkap', 'Kategori dan nominal wajib diisi.');
-    if (f.id) db.runSync('UPDATE transactions SET tanggal=?,jenis=?,kategori=?,nominal=?,ket=? WHERE id=?', [f.tanggal, f.jenis, f.kategori, nom, f.ket, f.id]);
-    else db.runSync('INSERT INTO transactions(tanggal,jenis,kategori,nominal,ket) VALUES(?,?,?,?,?)', [f.tanggal, f.jenis, f.kategori, nom, f.ket]);
-    setF({ ...blank, tanggal: f.tanggal }); bump();
-  };
-  const del = t => Alert.alert('Hapus transaksi?', `${t.kategori} ${rp(t.nominal)}`, [{ text: 'Batal' }, { text: 'Hapus', style: 'destructive', onPress: () => { db.runSync('DELETE FROM transactions WHERE id=?', [t.id]); bump(); } }]);
-  return (
-    <ScrollView contentContainerStyle={s.pad} keyboardShouldPersistTaps="handled">
-      <MonthPicker {...{ y, m, setY, setM }} />
-      <Section title={f.id ? 'Edit Transaksi' : 'Tambah Transaksi'}>
-        <Text style={s.lbl}>Tanggal (YYYY-MM-DD)</Text>
-        <TextInput style={s.in} value={f.tanggal} onChangeText={v => setF({ ...f, tanggal: v })} />
-        <Text style={s.lbl}>Jenis Transaksi</Text>
-        <Chips items={JENIS} value={f.jenis} onPick={v => setF({ ...f, jenis: v, kategori: '' })} />
-        <Text style={s.lbl}>Kategori</Text>
-        <Chips items={opts} value={f.kategori} onPick={v => setF({ ...f, kategori: v })} />
-        <Text style={s.lbl}>Nominal (Rp)</Text>
-        <TextInput style={s.in} keyboardType="numeric" value={String(f.nominal)} onChangeText={v => setF({ ...f, nominal: v })} />
-        <Text style={s.lbl}>Keterangan</Text>
-        <TextInput style={s.in} value={f.ket} onChangeText={v => setF({ ...f, ket: v })} />
-        <Btn t={f.id ? 'Simpan Perubahan' : 'Tambah'} onPress={save} />
-        {f.id ? <Btn t="Batal Edit" color="#636e72" onPress={() => setF(blank)} /> : null}
-      </Section>
-      <Section title={`Riwayat ${MONTHS[m - 1]} ${y} (${list.length})`}>
-        {list.map(t => { const c = cek(t, cats); return (
-          <View key={t.id} style={s.tx}>
-            <Text style={s.rn}>{t.tanggal}  •  {t.jenis}  •  {t.kategori || '(kosong)'}</Text>
-            <Text style={s.rv}>{rp(t.nominal)} {t.ket ? '— ' + t.ket : ''}</Text>
-            <Text style={{ color: c.startsWith('✔') ? GREEN : ORANGE, fontSize: 12 }}>{c}</Text>
-            <View style={s.row}>
-              <Btn small t="Edit" onPress={() => setF({ ...t, nominal: String(t.nominal || ''), ket: t.ket || '' })} />
-              <Btn small t="Hapus" color={RED} onPress={() => del(t)} />
-            </View>
-          </View>); })}
-      </Section>
-    </ScrollView>
-  );
-}
-
-function Kategori({ tick, bump }) {
-  const cats = useMemo(() => db.getAllSync('SELECT * FROM categories ORDER BY urut,id'), [tick]);
-  const [nw, setNw] = useState({});
-  const rename = (c, v) => { v = v.trim(); if (!v || v === c.nama) return; db.runSync('UPDATE categories SET nama=? WHERE id=?', [v, c.id]); db.runSync('UPDATE transactions SET kategori=? WHERE jenis=? AND kategori=?', [v, c.jenis, c.nama]); bump(); };
-  const setBud = (c, v) => { db.runSync('UPDATE categories SET anggaran=? WHERE id=?', [parseInt(v.replace(/\D/g, ''), 10) || 0, c.id]); bump(); };
-  const add = j => {
-    const n = (nw[j] || '').trim(); if (!n) return;
-    if (cats.some(c => c.jenis === j && c.nama.toLowerCase() === n.toLowerCase())) return Alert.alert('Sudah ada', n);
-    const u = db.getFirstSync('SELECT COALESCE(MAX(urut),-1)+1 u FROM categories WHERE jenis=?', [j]).u;
-    db.runSync('INSERT INTO categories(jenis,nama,anggaran,urut) VALUES(?,?,0,?)', [j, n, u]); setNw({ ...nw, [j]: '' }); bump();
-  };
-  const remove = c => Alert.alert('Hapus kategori?', c.nama, [{ text: 'Batal' }, { text: 'Hapus', style: 'destructive', onPress: () => { db.runSync('DELETE FROM categories WHERE id=?', [c.id]); bump(); } }]);
-  const reset = () => Alert.alert('Reset / Import Data Awal Excel', 'Semua kategori & transaksi diganti dengan data awal dari Excel.', [{ text: 'Batal' }, { text: 'Reset', style: 'destructive', onPress: () => { seedAll(); bump(); } }]);
-  const runImport = async replace => {
-    try {
-      const text = await pickAndRead(); if (text == null) return;
-      const r = importCsv(text, replace); bump();
-      Alert.alert('Import selesai', `Kategori diproses: ${r.kat} (baru: ${r.katBaru})\nTransaksi masuk: ${r.tx}\nTransaksi kembar dilewati: ${r.dobel}\nBaris tidak valid/dilewati: ${r.lewat}`);
-    } catch (e) { Alert.alert('Import gagal', String(e.message || e)); }
-  };
-  const doImport = () => Alert.alert('Import dari file CSV', 'Gabung: tambahkan data file ke data yang ada (transaksi kembar dilewati).\nGanti Semua: hapus semua data sekarang lalu isi dari file.', [
-    { text: 'Batal', style: 'cancel' }, { text: 'Gabung', onPress: () => runImport(false) }, { text: 'Ganti Semua', style: 'destructive', onPress: () => runImport(true) }]);
-  return (
-    <ScrollView contentContainerStyle={s.pad} keyboardShouldPersistTaps="handled">
-      <Section title="Backup & Restore Data">
-        <Text style={s.rn}>Export menyimpan semua kategori, anggaran, dan transaksi ke satu file CSV. Simpan file itu (Drive/WhatsApp), lalu Import di HP baru.</Text>
-        <Btn t="⬆ Export Backup (CSV)" onPress={() => exportBackup().catch(e => Alert.alert('Export gagal', String(e.message || e)))} />
-        <Btn t="⬇ Import dari File CSV" color={GREEN} onPress={doImport} />
-        <Btn t="📄 Download Template Import" color="#636e72" onPress={() => shareTemplate().catch(e => Alert.alert('Gagal', String(e.message || e)))} />
-      </Section>
-      <Text style={s.cardS}>Ubah nama / anggaran lalu tekan selesai di keyboard. Anggaran berlaku sama untuk semua bulan.</Text>
-      {JENIS.map(j => (
-        <Section key={j} title={j.toUpperCase()}>
-          {cats.filter(c => c.jenis === j).map(c => (
-            <View key={c.id + c.nama + c.anggaran} style={s.row}>
-              <TextInput style={[s.in, { flex: 1.4 }]} defaultValue={c.nama} onEndEditing={e => rename(c, e.nativeEvent.text)} />
-              <TextInput style={[s.in, { flex: 1 }]} keyboardType="numeric" defaultValue={String(c.anggaran)} onEndEditing={e => setBud(c, e.nativeEvent.text)} />
-              <TouchableOpacity onPress={() => remove(c)}><Text style={{ color: RED, fontSize: 20, paddingHorizontal: 6 }}>✕</Text></TouchableOpacity>
-            </View>))}
-          <View style={s.row}>
-            <TextInput style={[s.in, { flex: 1 }]} placeholder="Kategori baru..." value={nw[j] || ''} onChangeText={v => setNw({ ...nw, [j]: v })} />
-            <Btn small t="+ Tambah" onPress={() => add(j)} />
-          </View>
-          <Text style={[s.rn, { fontWeight: '700' }]}>TOTAL ANGGARAN {rp(cats.filter(c => c.jenis === j).reduce((a, c) => a + c.anggaran, 0))}</Text>
-        </Section>))}
-      <Btn t="Reset / Import Data Awal Excel" color="#636e72" onPress={reset} />
-    </ScrollView>
-  );
-}
-
-function Analisa({ y, setY, tick }) {
-  const rows = useMemo(() => yearData(y), [y, tick]);
-  const H = useMemo(() => highlights(rows), [rows]);
-  const doExport = () => exportCsv(`Analisa_${y}.csv`, [
-    ['Bulan', 'Pendapatan', 'Biaya', 'Tagihan', 'Pinjaman', 'Tabungan & Investasi', 'Total Pengeluaran', 'Saldo', 'Jumlah Transaksi', 'Status'],
-    ...rows.map(r => [r.bulan, r.pend, r.biaya, r.tagihan, r.pinjaman, r.tab, r.total, r.saldo, r.n, r.n ? (r.saldo >= 0 ? 'PLUS' : 'MINUS') : '']),
-    [], ['Total saldo', H.total], ['Rata-rata saldo', Math.round(H.avg)], ['Rasio tabungan', pct(H.rasio)]]);
-  const hv = r => (r ? `${r.bulan} (${rp(r.saldo)})` : '-');
-  return (
-    <ScrollView contentContainerStyle={s.pad}>
-      <View style={s.mp}>
-        <TouchableOpacity onPress={() => setY(y - 1)}><Text style={s.mpA}>◀</Text></TouchableOpacity>
-        <Text style={s.mpT}>Tahun {y}</Text>
-        <TouchableOpacity onPress={() => setY(y + 1)}><Text style={s.mpA}>▶</Text></TouchableOpacity>
-      </View>
-      <Section title="Rekap 12 Bulan">
-        {rows.map(r => (
-          <View key={r.m} style={s.tx}>
-            <View style={s.row}><Text style={[s.rn, { fontWeight: '700' }]}>{r.bulan}</Text>
-              <Text style={{ fontWeight: '700', color: r.n ? (r.saldo >= 0 ? GREEN : RED) : '#b2bec3' }}>{r.n ? (r.saldo >= 0 ? 'PLUS' : 'MINUS') : '-'}</Text></View>
-            <Text style={s.rv}>Pendapatan {rp(r.pend)}</Text>
-            <Text style={s.rv}>Biaya {rp(r.biaya)} • Tagihan {rp(r.tagihan)} • Pinjaman {rp(r.pinjaman)}</Text>
-            <Text style={s.rv}>Tabungan {rp(r.tab)} • Total keluar {rp(r.total)}</Text>
-            <Text style={s.rv}>Saldo {rp(r.saldo)} • {r.n} transaksi</Text>
-          </View>))}
-      </Section>
-      <Section title="Sorotan Tahun Ini">
-        {[['Total saldo setahun', rp(H.total)], ['Rata-rata saldo / bulan terisi', rp(H.avg)], ['Bulan saldo tertinggi', hv(H.hi)], ['Bulan saldo terendah', hv(H.lo)],
-          ['Jumlah bulan PLUS', H.plus], ['Jumlah bulan MINUS', H.minus], ['Total tabungan & investasi', rp(H.tab)], ['Rasio tabungan / pendapatan', pct(H.rasio)]]
-          .map(([k, v]) => <View key={k} style={s.row}><Text style={s.rn}>{k}</Text><Text style={[s.rv, { fontWeight: '700' }]}>{v}</Text></View>)}
-      </Section>
-      <Btn t="Export Analisa (CSV)" onPress={doExport} />
-    </ScrollView>
-  );
-}
-
-export default function App() {
+function Main() {
+  const insets = useSafeAreaInsets();
   const now = new Date();
   const [tab, setTab] = useState(0);
   const [y, setY] = useState(now.getFullYear());
   const [m, setM] = useState(now.getMonth() + 1);
   const [tick, setTick] = useState(0);
-  const bump = () => setTick(t => t + 1);
-  const P = { y, m, setY, setM, tick, bump };
-  const tabs = ['Dashboard', 'Input', 'Pengaturan', 'Tahunan'];
+  const [form, setForm] = useState(null); // null = tertutup, { tx } = form tambah (tx null) / edit
+  const [hide, setHide] = useState(true); // data keuangan tertutup setiap kali aplikasi dibuka
+  const [toast, setToast] = useState(null);
+  const [sheet, setSheet] = useState(false); // panel pemilih Buku Kas
+  const [profile, setProfile] = useState(getProfile); // null = belum masuk
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [welcome, setWelcome] = useState(() => !welcomeDone()); // layar sambutan sekali saja
+  const [recOpen, setRecOpen] = useState(false); // halaman Transaksi Berulang
+  const [clientOpen, setClientOpen] = useState(false); // panel input Google Web Client ID
+  const [cfgTick, setCfgTick] = useState(0); // dinaikkan setiap Web Client ID berubah
+  const [sessionOk, setSessionOk] = useState(null); // null = belum diperiksa; false = sesi Google terputus
+  const [syncTick, setSyncTick] = useState(0); // dinaikkan setiap status sinkron Drive berubah
+  const timer = useRef(null);
+
+  const notify = msg => { setToast(msg); clearTimeout(timer.current); timer.current = setTimeout(() => setToast(null), 2200); };
+  const book = getBook(); // buku kas aktif (dibaca ulang setiap render; murah)
+  const switchBook = id => { setActiveBook(id); setTick(t => t + 1); setSheet(false); };
+  const openForm = tx => setForm({ tx: tx || null });
+  const onSaved = tgl => { const [yy, mm] = tgl.split('-'); setY(+yy); setM(+mm); };
+
+  // ---- Akun ----
+  // Alur: masuk Google -> beri izin Drive (sekali) -> samakan dengan Google Drive (pulihkan / unggah / tanya bila dua-duanya berisi data).
+  // Keluar: unggah perubahan terakhir -> kosongkan SEMUA data di HP. Masuk lagi = data kembali dari Drive.
+  const failLogin = e => {
+    Alert.alert('Gagal masuk', authMessage(e), [{ text: 'OK', style: 'cancel' }, { text: e && e.code === 'NO_CLIENT_ID' ? 'Isi sekarang' : 'Ubah Web Client ID', onPress: () => setClientOpen(true) }]);
+    return false;
+  };
+  // Dipanggil bila HP dan Drive sama-sama berisi data. Hasil: 'merge' | 'replace' | 'local' | null (dibatalkan)
+  const askConflict = remote => new Promise(resolve => {
+    const what = remote.buku ? `${remote.buku} buku kas, ${remote.tx} transaksi, ` : '';
+    Alert.alert('Data ditemukan di Google Drive',
+      `Drive akun ini berisi data (${what}${fmtWaktu(remote.modifiedTime || remote.createdTime)}), dan HP ini juga sudah berisi data.\n\n• Gabungkan: data HP dan Drive disatukan (transaksi kembar dilewati).\n• Pakai Drive: data HP diganti data Drive (salinan data HP dibuat otomatis lebih dulu).\n• Pakai HP: data di Drive ditimpa data HP ini.\n\nKetuk di luar kotak ini untuk membatalkan.`,
+      [{ text: 'Gabungkan', onPress: () => resolve('merge') }, { text: 'Pakai Drive', style: 'destructive', onPress: () => resolve('replace') }, { text: 'Pakai HP', onPress: () => resolve('local') }],
+      { cancelable: true, onDismiss: () => resolve(null) });
+  });
+  const afterSync = (r, who) => {
+    setTick(t => t + 1); setSyncTick(t => t + 1);
+    if (r.action === 'pull') notify(`✔ Data dipulihkan dari Google Drive: ${r.info.buku} buku kas, ${r.info.tx} transaksi`);
+    else if (r.action === 'merge') notify('✔ Data HP digabung dengan Google Drive');
+    else if (r.action === 'push') notify(`✔ Data HP diunggah ke Google Drive: ${r.info.buku} buku kas, ${r.info.tx} transaksi`);
+    else notify(`✔ ${who}`);
+  };
+  const loginGoogle = async () => {
+    let u;
+    try { u = await signInWithGoogle(); } catch (e) { return failLogin(e); }
+    if (!u) return false; // dibatalkan
+    saveGoogleProfile(u); setProfile(getProfile());
+    const abort = async () => { await signOutGoogle(); clearProfile(); setProfile(null); };
+    try {
+      await getDriveToken(); // jendela izin Google Drive muncul di sini, sekali saja
+      const r = await loginSync({ ask: askConflict });
+      if (r.action === 'cancel') { await abort(); notify('Masuk dibatalkan'); return false; }
+      afterSync(r, `Masuk sebagai ${u.nama || u.email}`);
+      return true;
+    } catch (e) {
+      await abort();
+      Alert.alert('Gagal menyambungkan Google Drive', `${firstLine(e)}\n\nAkun belum dihubungkan dan data di HP tidak diubah.`);
+      return false;
+    }
+  };
+  // Sesi Google terputus (mis. Web Client ID diganti): masuk lagi dengan akun YANG SAMA tanpa menghapus data HP.
+  const reconnect = async () => {
+    const cur = getProfile();
+    try {
+      const u = await signInWithGoogle(); if (!u) return;
+      if (cur && u.googleId !== cur.googleId) {
+        await signOutGoogle();
+        Alert.alert('Akun berbeda', `Akun yang dipilih (${u.email}) berbeda dengan akun di aplikasi (${cur.email}). Pilih akun yang sama, atau keluar dulu lalu masuk dengan akun baru.`);
+        return;
+      }
+      saveGoogleProfile(u); setProfile(getProfile());
+      await getDriveToken();
+      const r = await loginSync({ ask: askConflict, sameAccount: true });
+      if (r.action === 'cancel') { notify('Dibatalkan'); return; }
+      afterSync(r, 'Terhubung kembali ke Google');
+      setCfgTick(t => t + 1);
+    } catch (e) { Alert.alert('Gagal menghubungkan ulang', `${authMessage(e)}`, [{ text: 'OK', style: 'cancel' }, { text: 'Ubah Web Client ID', onPress: () => setClientOpen(true) }]); }
+  };
+  const logout = async () => {
+    const r = await beforeLogout(); // mengunggah perubahan terakhir bila ada
+    if (!r.ok) {
+      const go = await new Promise(res => Alert.alert('Perubahan terakhir belum terunggah', `${firstLine(r.error)}\n\nBila tetap keluar, perubahan yang belum sampai di Google Drive akan HILANG dari HP ini.`,
+        [{ text: 'Batal', style: 'cancel', onPress: () => res(false) }, { text: 'Keluar & hapus', style: 'destructive', onPress: () => res(true) }], { cancelable: true, onDismiss: () => res(false) }));
+      if (!go) return;
+      try { await autoBackup('all'); } // jaring pengaman terakhir di HP, karena Drive tidak berhasil diperbarui
+      catch (e) { Alert.alert('Keluar dibatalkan', 'Salinan pengaman di HP gagal dibuat, jadi data tidak diubah.'); return; }
+    } else clearAutoBackups(); // data sudah aman di Drive; jangan tinggalkan salinan di HP
+    await signOutGoogle();
+    resetAllData();
+    setProfile(null); setProfileOpen(false); setForm(null); setRecOpen(false); setSheet(false);
+    setTick(t => t + 1); setSyncTick(t => t + 1);
+    notify('Anda telah keluar. Data di HP dikosongkan');
+  };
+  const syncNowUi = async () => {
+    try { const r = await syncNow(); notify(`✔ Tersinkron: ${r.info.buku} buku kas, ${r.info.tx} transaksi`); }
+    catch (e) { Alert.alert('Sinkron gagal', firstLine(e)); }
+    setSyncTick(t => t + 1);
+  };
+  const onClientSaved = r => {
+    setClientOpen(false); setCfgTick(t => t + 1);
+    if (r.changed && getProfile()) Alert.alert('Web Client ID diganti', 'Sesi Google lama diputus. Buka Profil lalu ketuk Hubungkan ulang. Data di HP tidak dihapus.');
+    else notify(r.empty ? 'Web Client ID dikosongkan' : r.changed ? '✔ Web Client ID disimpan' : 'Web Client ID tidak berubah');
+  };
+  const rename = n => { renameProfile(n); setProfile(getProfile()); notify('✔ Nama diperbarui'); };
+  const finishWelcome = () => { setWelcomeDone(); setWelcome(false); };
+
+  // ---- Sinkron otomatis ke Google Drive ----
+  // Setiap data berubah (tick naik) timer 45 detik dimulai ulang; saat habis, perubahan diunggah. Aplikasi ke latar belakang = unggah segera.
+  // autoSync sendiri memeriksa: sudah masuk, izin Drive ada, isi data benar-benar berubah, tidak kosong, dan batas harian.
+  const autoTimer = useRef(null); const lastAutoErr = useRef('');
+  const runAuto = async () => {
+    const r = await autoSync();
+    if (r.status === 'ok') { lastAutoErr.current = ''; setSyncTick(t => t + 1); }
+    else if (r.status === 'error') {
+      const m = firstLine(r.error);
+      if (m !== lastAutoErr.current) { lastAutoErr.current = m; notify(`⚠ Sinkron Drive gagal: ${m}`.slice(0, 90)); }
+      setSyncTick(t => t + 1);
+    }
+  };
+  useEffect(() => {
+    clearTimeout(autoTimer.current);
+    if (!profile) return undefined;
+    autoTimer.current = setTimeout(runAuto, AUTO_DELAY_MS);
+    return () => clearTimeout(autoTimer.current);
+  }, [tick, profile]);
+  useEffect(() => () => clearTimeout(autoTimer.current), []);
+
+  // Status sesi Google & sinkron hanya dihitung saat halaman Profil terbuka (menghitung sidik jari data tidak gratis)
+  useEffect(() => {
+    let on = true;
+    if (profile && profileOpen) sessionActive().then(v => { if (on) setSessionOk(v); }); else setSessionOk(null);
+    return () => { on = false; };
+  }, [profile, profileOpen, cfgTick, syncTick]);
+  const syncInfo = useMemo(() => (profile && profileOpen ? syncStatus() : null), [profile, profileOpen, tick, syncTick]);
+
+  // ---- Transaksi berulang ----
+  // Dijalankan saat aplikasi dibuka, kembali aktif, dan setiap data berubah: (1) catat transaksi berulang otomatis yang sudah jatuh tempo,
+  // (2) jadwalkan ulang notifikasi pengingat. Notifikasi dijadwalkan tertunda 600 ms agar beberapa perubahan beruntun cukup sekali jalan.
+  const syncTimer = useRef(null);
+  const refreshRecurring = () => {
+    try { const n = processRecurring(); if (n > 0) { setTick(t => t + 1); notify(`🔁 ${n} transaksi berulang dicatat`); } } catch (e) { /* jangan sampai menghentikan aplikasi */ }
+    clearTimeout(syncTimer.current); syncTimer.current = setTimeout(() => { syncReminders(); }, 600);
+  };
+  useEffect(() => { refreshRecurring(); }, [tick]);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', st => {
+      if (st === 'active') refreshRecurring();
+      else if (st === 'background' || st === 'inactive') { clearTimeout(autoTimer.current); runAuto(); } // unggah perubahan yang tertunda sebelum aplikasi ditutup
+    });
+    const unTap = onReminderTap(() => setRecOpen(true)); // ketuk notifikasi -> buka layar Transaksi Berulang
+    return () => { sub.remove(); unTap(); clearTimeout(syncTimer.current); };
+  }, []);
+
+  // Tombol back Android: tutup form -> kembali ke Dashboard -> baru keluar
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (form) { setForm(null); return true; }
+      if (recOpen) { setRecOpen(false); return true; }
+      if (profileOpen) { setProfileOpen(false); return true; }
+      if (tab !== 0) { setTab(0); return true; }
+      return false;
+    });
+    return () => sub.remove();
+  }, [form, tab, profileOpen, recOpen]);
+
+  const P = { y, m, setY, setM, tick, hide, toggleHide: () => setHide(h => !h), goTab: setTab, openForm, profile, openProfile: () => setProfileOpen(true), notify, bump: () => setTick(t => t + 1), openRec: () => setRecOpen(true) };
+  const Screen = TABS[tab][2];
   return (
-    <SafeAreaView style={s.root}>
-      <StatusBar style="light" />
-      <View style={s.head}><Text style={s.headT}>Monthly Budget Planner</Text></View>
-      <View style={{ flex: 1 }}>
-        {tab === 0 && <Dashboard {...P} />}
-        {tab === 1 && <Input {...P} />}
-        {tab === 2 && <Kategori {...P} />}
-        {tab === 3 && <Analisa {...P} />}
+    <View style={{ flex: 1, backgroundColor: BG }}>
+      <StatusBar style="dark" />
+      <View style={{ height: insets.top, backgroundColor: BG }} />
+      {/* Header: pemilih Buku Kas aktif (ketuk untuk ganti / tambah buku kas) */}
+      <View style={[s.head, { flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
+        <TouchableOpacity style={[s.bookBtn, { flexShrink: 1, alignSelf: 'center' }]} onPress={() => setSheet(true)} activeOpacity={0.7} accessibilityRole="button" accessibilityLabel={`Buku kas aktif: ${book.nama}. Ketuk untuk mengganti`}>
+          <BookAvatar tipe={book.tipe} size={38} />
+          <View style={{ flexShrink: 1 }}>
+            <Text style={s.headCap}>BUKU KAS</Text>
+            <Text style={s.headT} numberOfLines={1}>{book.nama}</Text>
+          </View>
+          <NavIcon name="chevdown" color={NAVY} size={20} strokeWidth={2.4} />
+        </TouchableOpacity>
+        <View style={{ flex: 1 }} />
+        {/* Ikon profil di kanan atas */}
+        <TouchableOpacity onPress={() => setProfileOpen(true)} activeOpacity={0.7} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }} accessibilityRole="button"
+          accessibilityLabel={profile ? `Profil: ${profile.nama}` : 'Profil. Belum masuk'}
+          style={{ borderRadius: 24, padding: 3, backgroundColor: '#fff', elevation: 1, shadowColor: '#14365d', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } }}>
+          <Avatar profile={profile} size={40} />
+        </TouchableOpacity>
       </View>
-      <View style={s.nav}>{tabs.map((t, i) => (
-        <TouchableOpacity key={t} style={s.navI} onPress={() => setTab(i)}>
-          <Text style={[s.navT, tab === i && { color: NAVY, fontWeight: '800' }]}>{['📊', '📝', '⚙️', '📅'][i]}{'\n'}{t}</Text>
-        </TouchableOpacity>))}</View>
-    </SafeAreaView>
+      <View style={{ flex: 1 }}>
+        {/* Satu layar yang error tidak mematikan menu & pemilih buku; berpindah tab / bulan / buku kas mencoba render ulang */}
+        <ErrorBoundary label={`tab:${TABS[tab][0]}`} resetKeys={[tab, book.id, y, m, tick]} title={`Layar ${TABS[tab][0]} bermasalah`}>
+          <Screen {...P} />
+        </ErrorBoundary>
+      </View>
+      {/* Menu bawah: 2 menu | slot tengah (tombol Transaksi menonjol) | 2 menu. Ikon di atas, label di bawah. */}
+      <View style={[s.nav, { paddingBottom: insets.bottom + 4 }]}>
+        {[0, 1, 'C', 2, 3].map(k => {
+          if (k === 'C') return (
+            <TouchableOpacity key="C" style={s.navI} activeOpacity={0.7} onPress={() => openForm()} accessibilityRole="button" accessibilityLabel="Tambah transaksi">
+              <Text style={[s.navT, { color: NAVY, fontWeight: '800' }]}>Tambah</Text>
+            </TouchableOpacity>);
+          const [name, icon] = TABS[k]; const on = tab === k;
+          return (
+            <TouchableOpacity key={name} style={s.navI} activeOpacity={0.7} onPress={() => setTab(k)} accessibilityRole="tab" accessibilityLabel={name} accessibilityState={{ selected: on }}>
+              <NavIcon name={icon} color={on ? NAVY : '#8794a6'} strokeWidth={on ? 2.2 : 1.9} />
+              <Text style={[s.navT, on && { color: NAVY, fontWeight: '800' }]} numberOfLines={1}>{name}</Text>
+            </TouchableOpacity>);
+        })}
+      </View>
+      {/* Tombol bulat di tengah dibuat sebagai lapisan sendiri agar bagian yang menonjol ke atas tetap bisa diketuk di Android */}
+      <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, bottom: insets.bottom + 22, alignItems: 'center' }}>
+        <TouchableOpacity style={s.navC} activeOpacity={0.85} onPress={() => openForm()} accessibilityRole="button" accessibilityLabel="Tambah transaksi">
+          <NavIcon name="tambah" color="#fff" size={26} strokeWidth={2.6} />
+        </TouchableOpacity>
+      </View>
+
+      <ErrorBoundary label="book-sheet" onReset={() => setSheet(false)} retryLabel="Tutup" title="Daftar buku kas bermasalah">
+        <BookSheet visible={sheet} onClose={() => setSheet(false)} activeId={book.id} tick={tick} hide={hide} y={y} m={m}
+          onSwitch={switchBook} onChanged={() => setTick(t => t + 1)} notify={notify} />
+      </ErrorBoundary>
+
+      {/* Halaman form tambah/edit: menutup seluruh layar, layar di belakangnya tetap terjaga (posisi scroll tidak hilang) */}
+      {form && (
+        <View style={{ position: 'absolute', top: insets.top, left: 0, right: 0, bottom: 0, backgroundColor: BG }}>
+          <ErrorBoundary label="form" onReset={() => setForm(null)} retryLabel="Tutup form" title="Form transaksi bermasalah">
+            <TransaksiFormScreen key={form.tx ? form.tx.id : 'baru'} tx={form.tx} onClose={() => setForm(null)} onSaved={onSaved} notify={notify} bump={P.bump} />
+          </ErrorBoundary>
+        </View>)}
+
+      {/* Halaman Transaksi Berulang: daftar tagihan tetap + pengingat jatuh tempo */}
+      {recOpen && (
+        <View style={{ position: 'absolute', top: insets.top, left: 0, right: 0, bottom: 0, backgroundColor: BG }}>
+          <ErrorBoundary label="berulang" onReset={() => setRecOpen(false)} retryLabel="Tutup" title="Transaksi berulang bermasalah">
+            <BerulangScreen tick={tick} bump={P.bump} notify={notify} onClose={() => setRecOpen(false)} />
+          </ErrorBoundary>
+        </View>)}
+
+      {/* Halaman profil: menutup seluruh layar, dibuka dari ikon di kanan atas */}
+      {profileOpen && (
+        <View style={{ position: 'absolute', top: insets.top, left: 0, right: 0, bottom: 0, backgroundColor: BG }}>
+          <ErrorBoundary label="profil" onReset={() => setProfileOpen(false)} retryLabel="Tutup" title="Halaman profil bermasalah">
+            <ProfileScreen profile={profile} onClose={() => setProfileOpen(false)} onLogin={loginGoogle} onLogout={logout} onRename={rename}
+              onClientId={() => setClientOpen(true)} cfgTick={cfgTick} sessionOk={sessionOk} sync={syncInfo} onSyncNow={syncNowUi} onReconnect={reconnect} />
+          </ErrorBoundary>
+        </View>)}
+
+      {/* Layar sambutan (sekali saja): daftar/masuk Google atau lanjut tanpa akun */}
+      {welcome && <WelcomeScreen onGoogle={async () => { if (await loginGoogle()) finishWelcome(); }} onSkip={finishWelcome} onClientId={() => setClientOpen(true)} clientIdSet={hasWebClientId()} />}
+
+      <ClientIdSheet visible={clientOpen} hasSession={!!profile} onClose={() => setClientOpen(false)} onSaved={onClientSaved} />
+
+      {toast && (
+        <View pointerEvents="none" style={{ position: 'absolute', top: insets.top + 64, left: 0, right: 0, alignItems: 'center' }}>
+          <View style={s.toast}><Text style={s.toastT}>{toast}</Text></View>
+        </View>)}
+    </View>
   );
 }
 
-const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: BG, paddingTop: Platform.OS === 'android' ? RNStatusBar.currentHeight : 0 },
-  head: { backgroundColor: NAVY, padding: 14 }, headT: { color: '#fff', fontSize: 18, fontWeight: '800' },
-  pad: { padding: 12, paddingBottom: 30 },
-  card: { backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8, borderLeftWidth: 5, elevation: 1 },
-  cardT: { fontSize: 11, color: '#636e72', fontWeight: '700' }, cardV: { fontSize: 20, fontWeight: '800', color: NAVY }, cardS: { fontSize: 12, color: '#636e72', marginBottom: 4 },
-  sec: { backgroundColor: '#fff', borderRadius: 10, padding: 12, marginVertical: 6 }, secT: { fontWeight: '800', color: NAVY, marginBottom: 8, fontSize: 15 },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 4 },
-  rn: { fontSize: 13, color: '#2d3436', flexShrink: 1 }, rv: { fontSize: 12, color: '#2d3436', flexShrink: 1 },
-  track: { height: 8, backgroundColor: '#dfe6e9', borderRadius: 4 },
-  stack: { flexDirection: 'row', height: 22, borderRadius: 6, overflow: 'hidden', marginBottom: 8 }, leg: { fontSize: 12, marginTop: 2 },
-  mp: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 10, padding: 10, marginBottom: 8 },
-  mpA: { fontSize: 22, color: NAVY, paddingHorizontal: 14 }, mpT: { fontSize: 17, fontWeight: '800', color: NAVY },
-  btn: { borderRadius: 8, paddingVertical: 11, paddingHorizontal: 14, alignItems: 'center', marginTop: 8 }, btnT: { color: '#fff', fontWeight: '700' },
-  lbl: { fontSize: 12, color: '#636e72', marginTop: 8 },
-  in: { borderWidth: 1, borderColor: '#b2bec3', borderRadius: 8, padding: 8, backgroundColor: '#fff', marginTop: 4 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
-  chip: { borderWidth: 1, borderColor: NAVY, borderRadius: 16, paddingHorizontal: 10, paddingVertical: 5 }, chipT: { color: NAVY, fontSize: 12 },
-  tx: { borderBottomWidth: 1, borderColor: '#dfe6e9', paddingVertical: 8 },
-  nav: { flexDirection: 'row', backgroundColor: '#fff', borderTopWidth: 1, borderColor: '#dfe6e9' },
-  navI: { flex: 1, alignItems: 'center', paddingVertical: 8 }, navT: { textAlign: 'center', fontSize: 11, color: '#636e72' },
-});
+export default function App() {
+  if (bootError) return (
+    <ErrorFallback full canBackup={false} error={bootError} title="Database tidak dapat dibuka"
+      hint="Aplikasi gagal menyiapkan database. Pembaruan database berjalan sekali-jalan dan dibatalkan penuh saat gagal, jadi data lama Anda tidak berubah. Tutup lalu buka ulang aplikasi. Bila tetap gagal, kirimkan pesan di bawah ini ke pembuat aplikasi; jangan hapus data aplikasi." />);
+  // Lapisan terluar: kesalahan yang lolos dari semua pelindung di dalam tetap menampilkan layar penjelasan, bukan layar putih
+  return <ErrorBoundary label="root" full title="Aplikasi mengalami kesalahan"><SafeAreaProvider><Main /></SafeAreaProvider></ErrorBoundary>;
+}

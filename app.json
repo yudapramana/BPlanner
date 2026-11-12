@@ -2,12 +2,28 @@
   "expo": {
     "name": "Monthly Budget Planner",
     "slug": "budget-planner",
-    "version": "1.1.0",
+    "version": "1.13.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "android": {
       "package": "com.yuda.budgetplanner",
-      "versionCode": 2
-    }
+      "versionCode": 18,
+      "permissions": [
+        "POST_NOTIFICATIONS"
+      ]
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-sharing",
+      "expo-sqlite",
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "tagihan"
+        }
+      ],
+      "expo-status-bar",
+      "@react-native-community/datetimepicker"
+    ]
   }
 }
