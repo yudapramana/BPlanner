@@ -238,12 +238,12 @@ describe('revisi data (B1): deteksi perubahan tanpa serialisasi', () => {
   });
 });
 
-describe('Drive diubah perangkat lain (B2)', () => {
-  const otherDevice = (extra = 'dari HP lain') => { // HP lain mengunggah: isi & modifiedTime berubah
+describe('Drive diubah perangkat lain yang memakai VERSI APLIKASI LAMA (file tanpa uid): pengguna memilih', () => {
+  const otherDevice = (extra = 'dari HP lain') => { // HP lain (versi lama) mengunggah: isi & modifiedTime berubah
     const other = freshSnapshotWith(extra); const f = drive.files.find(x => x.kind === 'sync');
     f.text = other; f.modifiedTime = '2026-11-12T23:00:00.000Z';
   };
-  const freshSnapshotWith = ket => { const snap = buildSnapshot('all'); snap.books[0].transaksi.push({ tanggal: '2026-11-09', jenis: 'Biaya', kategori: 'Makanan', nominal: 7777, ket }); return JSON.stringify(snap); };
+  const freshSnapshotWith = ket => { const snap = legacy(buildSnapshot('all')); snap.books[0].transaksi.push({ tanggal: '2026-11-09', jenis: 'Biaya', kategori: 'Makanan', nominal: 7777, ket }); return JSON.stringify(snap); };
 
   test('auto: Drive berubah dari HP lain -> TIDAK menimpa, status conflict, panggilan berikutnya tanpa API', async () => {
     login(); seedA(); await sync.auto(); otherDevice();
@@ -290,6 +290,13 @@ describe('Drive diubah perangkat lain (B2)', () => {
     expect((await sync.auto()).status).toBe('ok'); expect(drive.files).toHaveLength(1);
   });
 });
+
+// File dari versi sebelum sinkron banyak HP (tanpa uid/upd/catatan hapus)
+function legacy(snap) {
+  const strip = o => { const { uid, upd, ...r } = o; return r; };
+  const { hapus, ...s } = snap;
+  return { ...s, books: s.books.map(b => ({ ...strip(b), kategori: b.kategori.map(strip), transaksi: b.transaksi.map(strip), berulang: (b.berulang || []).map(strip) })) };
+}
 
 // Memakai instance Drive yang sama dengan file yang sudah ada (setelah freshDb mereset meta, id sinkron tidak diingat)
 function mk2(d) { clock = new Date(2026, 10, 12, 9, 0, 0); sync = makeSync({ ui: d, bg: d, now: () => clock }); }

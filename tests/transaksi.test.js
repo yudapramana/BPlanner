@@ -50,7 +50,11 @@ describe('Urungkan hapus transaksi', () => {
     const before = rows('SELECT * FROM transactions WHERE id=?', [id])[0];
     const snap = deleteTransaction(id); expect(count('transactions')).toBe(0);
     expect(restoreTransaction(snap)).toBe(true);
-    expect(rows('SELECT * FROM transactions WHERE id=?', [id])[0]).toEqual(before); expect(before.category_id).toBe(c);
+    const { upd, ...after } = rows('SELECT * FROM transactions WHERE id=?', [id])[0];
+    const { upd: upd0, ...want } = before;
+    expect(after).toEqual(want); expect(before.category_id).toBe(c);
+    expect(upd).toBeGreaterThan(upd0); // dikembalikan = perubahan terbaru (menang atas catatan hapus yang mungkin sudah tersinkron)
+    expect(count('deleted', "tbl='transactions' AND uid=?", [after.uid])).toBe(0); // catatan hapusnya ikut hilang
   });
   test('hasil transaksi berulang: bulannya kembali dari skip ke done dan tidak dibuat ulang', () => {
     const c = cat('Tagihan', 'Uang Kos', 1000000);
@@ -79,4 +83,35 @@ describe('Urungkan hapus transaksi', () => {
     expect(restoreTransaction(snap)).toBe(false); expect(count('transactions')).toBe(0);
   });
   test('id tidak ada -> deleteTransaction null; restore(null) false', () => { expect(deleteTransaction(999)).toBeNull(); expect(restoreTransaction(null)).toBe(false); });
+});
+describe('rentang tanggal terindeks (dateRange / DATE_IN)', () => {
+  const { DATE_IN, dateRange } = require('../lib/db');
+  const ids = p => db.getAllSync(`SELECT id FROM transactions WHERE book_id=1 AND ${DATE_IN} ORDER BY id`, dateRange(p)).map(r => r.id);
+  const old = p => db.getAllSync('SELECT id FROM transactions WHERE book_id=1 AND tanggal LIKE ? ORDER BY id', [`${p}%`]).map(r => r.id);
+  beforeEach(() => {
+    cat('Biaya', 'Makanan');
+    ['2025-12-31', '2026-01-01', '2026-01-31', '2026-02-01', '2026-10-05', '2026-11-30', '2026-12-31', '2027-01-01'].forEach((d, i) => tx(d, 'Biaya', 'Makanan', i + 1));
+  });
+  test.each(['2026-01', '2026-02', '2026-10', '2026-12', '2026', '2025', '2027', '2026-03', ''])('awalan "%s" = hasil sama dengan cara lama (LIKE)', p => {
+    expect(ids(p)).toEqual(old(p));
+  });
+  test('batas bulan & tahun tepat (tanggal pertama dan terakhir ikut, bulan sebelah tidak)', () => {
+    expect(ids('2026-01').length).toBe(2); expect(ids('2026').length).toBe(6); expect(ids('').length).toBe(8);
+  });
+  test('SQLite memakai indeks ix_tx_book untuk rentang tanggal (bukan membaca seluruh tabel)', () => {
+    const plan = db.getAllSync(`EXPLAIN QUERY PLAN SELECT * FROM transactions WHERE book_id=? AND ${DATE_IN}`, [1, ...dateRange('2026-01')]).map(r => r.detail).join(' | ');
+    expect(plan).toMatch(/ix_tx_book \(book_id=\? AND tanggal>\? AND tanggal<\?\)/);
+  });
+});
+
+describe('groupByDay (bagian SectionList di halaman Transaksi)', () => {
+  const { groupByDay } = require('../lib/calc');
+  test('dikelompokkan per tanggal berurutan; total keluar per hari tanpa pendapatan', () => {
+    const g = groupByDay([
+      { id: 3, tanggal: '2026-11-02', jenis: 'Biaya', nominal: 10000 }, { id: 2, tanggal: '2026-11-02', jenis: 'Pendapatan', nominal: 500000 },
+      { id: 1, tanggal: '2026-11-01', jenis: 'Investasi/Tabungan', nominal: 25000 },
+    ]);
+    expect(g.map(x => [x.tanggal, x.out, x.data.map(t => t.id)])).toEqual([['2026-11-02', 10000, [3, 2]], ['2026-11-01', 25000, [1]]]);
+    expect(groupByDay([])).toEqual([]);
+  });
 });

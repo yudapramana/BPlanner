@@ -9,4 +9,5 @@ module.exports = {
   AppState: { addEventListener: () => ({ remove() {} }) },
   BackHandler: { addEventListener: () => ({ remove() {} }) },
   View: host('View'), Text: host('Text'), ScrollView: host('ScrollView'), TouchableOpacity: host('TouchableOpacity'), ActivityIndicator: host('ActivityIndicator'),
+  SectionList: host('SectionList'), TextInput: host('TextInput'),
 };

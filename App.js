@@ -36,6 +36,7 @@ try { initNotifications(); } catch (e) { reportError('initNotifications', e); } 
 if (!bootError) applyScreenPrivacy(); // kunci aktif -> layar disembunyikan di daftar aplikasi terbaru & tangkapan layar diblokir
 
 const AUTO_DELAY_MS = 45000; // sinkron otomatis berjalan 45 detik setelah perubahan terakhir (debounce)
+const REMOTE_EVERY_MS = 120000; // pemeriksaan perubahan dari HP lain paling sering 2 menit sekali
 const firstLine = e => String((e && e.message) || e || '').split('\n')[0];
 
 const TABS = [['Dashboard', 'dashboard', DashboardScreen], ['Transaksi', 'transaksi', TransaksiScreen], ['Anggaran', 'anggaran', PengaturanScreen], ['Pengeluaran', 'pengeluaran', ExpensesScreen]];
@@ -213,9 +214,16 @@ function Main() {
   // Setiap data berubah (tick naik) timer 45 detik dimulai ulang; saat habis, perubahan diunggah. Aplikasi ke latar belakang = unggah segera.
   // autoSync sendiri memeriksa: sudah masuk, izin Drive ada, isi data benar-benar berubah, tidak kosong, dan batas harian.
   const autoTimer = useRef(null); const lastAutoErr = useRef('');
-  const runAuto = async () => {
-    const r = await autoSync();
-    if (r.status === 'ok') { lastAutoErr.current = ''; setSyncTick(t => t + 1); }
+  const runAuto = async (opts = {}) => {
+    const r = await autoSync(opts);
+    if (r.status === 'ok') {
+      lastAutoErr.current = ''; setSyncTick(t => t + 1);
+      if (r.action === 'merge') { // perubahan dari HP lain masuk: muat ulang layar
+        setTick(t => t + 1);
+        const x = r.res || {}; const n = (x.tx || 0) + (x.ubah || 0) + (x.hapus || 0);
+        if (n > 0) notify(`🔄 ${n} perubahan dari HP lain digabungkan`);
+      }
+    }
     else if (r.status === 'conflict') {
       setSyncTick(t => t + 1);
       if (lastAutoErr.current !== 'conflict') { lastAutoErr.current = 'conflict'; notify('⚠ Drive diubah dari perangkat lain. Buka Profil › Sinkronkan sekarang.'); }
@@ -233,6 +241,13 @@ function Main() {
     return () => clearTimeout(autoTimer.current);
   }, [tick, profile]);
   useEffect(() => () => clearTimeout(autoTimer.current), []);
+  // Periksa perubahan dari HP lain saat aplikasi dibuka / kembali aktif (1 panggilan API), paling sering sekali per 2 menit
+  const lastRemote = useRef(0);
+  const checkRemote = () => {
+    if (!getProfile() || Date.now() - lastRemote.current < REMOTE_EVERY_MS) return;
+    lastRemote.current = Date.now(); runAuto({ remote: true });
+  };
+  useEffect(() => { if (profile) { const t = setTimeout(checkRemote, 3000); return () => clearTimeout(t); } return undefined; }, [profile]);
 
   // Status sesi Google & sinkron hanya dihitung saat halaman Profil terbuka (menghitung sidik jari data tidak gratis)
   useEffect(() => {
@@ -253,7 +268,7 @@ function Main() {
   useEffect(() => { refreshRecurring(); }, [tick]);
   useEffect(() => {
     const sub = AppState.addEventListener('change', st => {
-      if (st === 'active') refreshRecurring();
+      if (st === 'active') { refreshRecurring(); checkRemote(); }
       else if (st === 'background' || st === 'inactive') { clearTimeout(autoTimer.current); runAuto(); } // unggah perubahan yang tertunda sebelum aplikasi ditutup
     });
     const unTap = onReminderTap(() => setRecOpen(true)); // ketuk notifikasi -> buka layar Transaksi Berulang

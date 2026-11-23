@@ -6,6 +6,9 @@ import {
   buildSnapshot, inspectImport, runImport, autoBackup, latestAutoBackup, exportAllBooks, exportBackup, shareTemplate, SNAPSHOT_VERSION,
 } from '../lib/backup';
 import { SEED_CATS } from '../lib/seed';
+// File dari versi sebelum sinkron banyak HP (tanpa uid/upd/catatan hapus)
+const legacy = snap => { const strip = o => { const { uid, upd, ...r } = o; return r; };
+  const { hapus, ...s } = snap; return { ...s, books: s.books.map(b => ({ ...strip(b), kategori: b.kategori.map(strip), transaksi: b.transaksi.map(strip), berulang: (b.berulang || []).map(strip) })) }; };
 
 const NOW = new Date(2026, 10, 11, 12);
 
@@ -120,8 +123,8 @@ describe('Gabung (merge) dari JSON', () => {
     expect(r.res).toMatchObject({ tx: 0, dobel: 7, rec: 0, bukuBaru: 0, katBaru: 0 });
     expect(autoFiles()).toHaveLength(0); // gabung tidak menghapus apa pun -> tidak perlu backup otomatis
   });
-  test('menggabung ke buku bernama sama (tanpa beda huruf besar/kecil): menambah yang baru, memperbarui anggaran, buku lain tidak tersentuh', async () => {
-    seedData(); const snap = buildSnapshot('all');
+  test('file lama (tanpa uid): menggabung ke buku bernama sama (tanpa beda huruf besar/kecil): menambah yang baru, memperbarui anggaran, buku lain tidak tersentuh', async () => {
+    seedData(); const snap = legacy(buildSnapshot('all'));
     snap.books[0].nama = 'utama';
     snap.books[0].kategori.find(c => c.nama === 'Makanan').anggaran = 1234567;
     snap.books[0].transaksi.push({ tanggal: '2026-11-09', jenis: 'Biaya', kategori: 'Makanan', nominal: 11111, ket: 'baru', kat: snap.books[0].kategori.findIndex(c => c.nama === 'Makanan'), rec: null });
@@ -131,8 +134,8 @@ describe('Gabung (merge) dari JSON', () => {
     expect(findCategory('Biaya', 'Makanan', 1).anggaran).toBe(1234567);
     expect(count('transactions', "ket='baru'")).toBe(1);
   });
-  test('buku yang belum ada dibuat baru', async () => {
-    seedData(); const snap = buildSnapshot('all'); snap.books[1].nama = 'Liburan';
+  test('file lama (tanpa uid): buku yang belum ada dibuat baru', async () => {
+    seedData(); const snap = legacy(buildSnapshot('all')); snap.books[1].nama = 'Liburan';
     const r = await runImport(inspectImport(JSON.stringify(snap)), false);
     expect(r.res.bukuBaru).toBe(1); expect(getBooks().map(b => b.nama)).toEqual(['Utama', 'Usaha', 'Liburan']);
   });

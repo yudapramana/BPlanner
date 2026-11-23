@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, StyleSheet,
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { s, NAVY, BG, GCOL } from '../theme';
 import DateField, { toYmd } from '../components/DateField';
-import { db, bid, getBook } from '../lib/db';
+import { db, bid, getBook, DATE_IN, dateRange } from '../lib/db';
 import { JENIS, rp, GRAY, statusOf } from '../lib/calc';
 import useKeyboard from '../lib/useKeyboard';
 import { Chevron } from '../components/ui';
@@ -37,7 +37,7 @@ export default function TransaksiFormScreen({ tx, onClose, onSaved, notify, bump
   const orphan = editing && tx.category_id == null && f.catId == null; // transaksi lama yang kategorinya sudah dihapus
   const hint = useMemo(() => {
     if (!sel) return null;
-    const spent = db.getFirstSync('SELECT COALESCE(SUM(nominal),0) s FROM transactions WHERE category_id=? AND substr(tanggal,1,7)=? AND id != ?', [sel.id, f.tanggal.slice(0, 7), tx ? tx.id : -1]).s;
+    const spent = db.getFirstSync(`SELECT COALESCE(SUM(nominal),0) s FROM transactions WHERE category_id=? AND ${DATE_IN} AND id != ?`, [sel.id, ...dateRange(f.tanggal.slice(0, 7)), tx ? tx.id : -1]).s;
     return { budget: sel.anggaran, spent, st: statusOf(f.jenis, { budget: sel.anggaran, real: spent + nom }) };
   }, [sel, f.jenis, f.tanggal, nom]);
   const sugg = useMemo(() => !sel ? [] : db.getAllSync("SELECT ket FROM transactions WHERE category_id=? AND ket IS NOT NULL AND ket != '' GROUP BY ket ORDER BY MAX(id) DESC LIMIT 5", [sel.id]).map(r => r.ket), [sel]);

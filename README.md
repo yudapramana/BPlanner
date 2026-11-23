@@ -1,4 +1,4 @@
-# Monthly Budget Planner (Android) v1.14.0 — Expo SDK 58
+# Monthly Budget Planner (Android) v1.15.0 — Expo SDK 58
 
 ## Struktur
 - `App.js` — navigasi bawah + state bulan/tahun; menjalankan pencatatan otomatis & penjadwalan pengingat (`refreshRecurring`)
@@ -189,3 +189,10 @@ Tes juga dijalankan otomatis di GitHub Actions sebelum APK dibuild; bila ada yan
 **Pengujian.** 12 suite, 307 tes; `npx expo export --platform android` berhasil.
 
 **Belum dikerjakan sebelum production.** Mengisi Web Client ID langsung di aplikasi (kolom di layar sambutan/Profil dipertahankan untuk pengembang), OAuth consent screen ke status *In production*, Privacy Policy dan formulir Data Safety, akun Play Console (akun personal baru: closed testing 12 tester selama 14 hari; cek aturan terbaru saat mendaftar).
+## Sinkron banyak HP (migrasi database v5)
+- Setiap buku kas, kategori, transaksi, dan transaksi berulang punya **uid** (id lintas HP) dan **upd** (waktu ubah terakhir). Baris yang dihapus dicatat di tabel `deleted` (catatan hapus). Semuanya diisi trigger database, jadi kode lain tidak perlu mengisinya.
+- **Gabung** (sinkron, Import JSON Gabung): baris dicocokkan lewat uid, lalu versi yang **paling baru diubah** yang dipakai. Yang dihapus di satu HP ikut terhapus di HP lain dan tidak muncul lagi, kecuali diubah di HP lain *setelah* dihapus. Baris tanpa uid (file versi lama) dicocokkan lewat isi seperti sebelumnya.
+- **Sinkron otomatis menggabungkan sendiri** bila file Drive berformat baru: tanpa dialog. Aplikasi juga memeriksa perubahan dari HP lain saat dibuka / kembali aktif (paling sering 2 menit sekali). Sebelum menggabung, salinan JSON dibuat di `auto-backup/`. File dari versi aplikasi lama tetap memakai dialog Gabungkan / Pakai Drive / Pakai HP.
+- Transaksi hasil transaksi berulang memakai uid tetap per (templat, bulan), sehingga bila dua HP sama-sama mencatatnya hasilnya tetap satu.
+- Format file backup tetap versi 1 (kolom `uid`, `upd`, `hapus` hanya tambahan; versi lama mengabaikannya).
+- Catatan: "paling baru" memakai jam HP. Catatan hapus disimpan 400 hari.

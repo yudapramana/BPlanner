@@ -31,4 +31,8 @@ const facade = {
   },
 };
 
-module.exports = { openDatabaseSync: () => facade, __loadSql: loadSql, __resetDb: resetDb, __raw: rawDb };
+// Simulasi beberapa HP: simpan isi database saat ini (bytes) lalu muat database lain.
+const exportDb = () => rawDb().export();
+const importDb = bytes => { if (raw) raw.close(); raw = new SQL.Database(bytes); };
+
+module.exports = { openDatabaseSync: () => facade, __loadSql: loadSql, __resetDb: resetDb, __raw: rawDb, __export: exportDb, __import: importDb };

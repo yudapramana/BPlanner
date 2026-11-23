@@ -5,7 +5,7 @@ import { Btn, Prog, Section, MonthPicker } from '../components/ui';
 import Donut from '../components/Donut';
 import EyeIcon from '../components/EyeIcon';
 import TxRow from '../components/TxRow';
-import { db, bid } from '../lib/db';
+import { db, bid, DATE_IN, dateRange } from '../lib/db';
 import { JENIS, MONTHS, rp, rpk, pct, ym, MASK, MASK_PCT, GREEN, ORANGE, RED, GRAY, monthData, statusOf, colorFor } from '../lib/calc';
 import { shareSheets, askFormat, failAlert } from '../lib/excel';
 import { pendingList, thresholdNote, dueLabel, postOccurrence, NOTE_COLOR } from '../lib/recurring';
@@ -73,7 +73,7 @@ export default function DashboardScreen({ y, m, setY, setM, tick, goTab, openFor
   const outReal = d.Biaya.real + d.Tagihan.real + d.Pinjaman.real + tab.real;
   const outBud = d.Biaya.budget + d.Tagihan.budget + d.Pinjaman.budget + tab.budget;
   const empty = JENIS.every(j => d[j].real === 0);
-  const recent = useMemo(() => db.getAllSync('SELECT * FROM transactions WHERE book_id=? AND substr(tanggal,1,7)=? ORDER BY tanggal DESC,id DESC LIMIT 5', [bid(), ym(y, m)]), [y, m, tick]);
+  const recent = useMemo(() => db.getAllSync(`SELECT * FROM transactions WHERE book_id=? AND ${DATE_IN} ORDER BY tanggal DESC,id DESC LIMIT 5`, [bid(), ...dateRange(ym(y, m))]), [y, m, tick]);
 
   // Jatuh tempo dalam 7 hari (atau terlambat) dari transaksi berulang buku kas ini; selalu relatif terhadap hari ini, bukan bulan yang sedang dilihat
   const due = useMemo(() => pendingList({ lookback: 2, ahead: 1 }).filter(o => o.days <= 7).slice(0, 6), [tick]);

@@ -62,7 +62,7 @@ export default function PengaturanScreen({ tick, bump, notify, profile, openProf
     try {
       const { kind, res: r, backup } = await runImport(ins, replace); bump();
       const body = kind === 'json'
-        ? `Buku kas diproses: ${r.buku} (baru: ${r.bukuBaru})\nKategori diproses: ${r.kat} (baru: ${r.katBaru})\nTransaksi masuk: ${r.tx}${r.rec ? `\nTransaksi berulang baru: ${r.rec}` : ''}\nTransaksi kembar dilewati: ${r.dobel}\nBaris tidak valid/dilewati: ${r.lewat}`
+        ? `Buku kas diproses: ${r.buku} (baru: ${r.bukuBaru})\nKategori diproses: ${r.kat} (baru: ${r.katBaru})\nTransaksi masuk: ${r.tx}${r.rec ? `\nTransaksi berulang baru: ${r.rec}` : ''}\nTransaksi kembar dilewati: ${r.dobel}${r.ubah ? `\nDiperbarui (versi file lebih baru): ${r.ubah}` : ''}${r.hapus ? `\nDihapus (sudah dihapus di HP lain): ${r.hapus}` : ''}${r.terhapus ? `\nDilewati (sudah Anda hapus di HP ini): ${r.terhapus}` : ''}\nBaris tidak valid/dilewati: ${r.lewat}`
         : `Kategori diproses: ${r.kat} (baru: ${r.katBaru})\nTransaksi masuk: ${r.tx}\nTransaksi kembar dilewati: ${r.dobel}\nBaris tidak valid/dilewati: ${r.lewat}`;
       Alert.alert('Import selesai', body + (backup ? `\n\nData lama sudah disalin otomatis (${backup.name}).` : ''),
         backup ? [{ text: 'OK' }, { text: 'Simpan salinan data lama', onPress: () => shareAutoBackup(backup).catch(failAlert('Gagal')) }] : [{ text: 'OK' }]);
