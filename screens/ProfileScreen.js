@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, StyleSheet, Switch, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import Avatar from '../components/Avatar';
 import GoogleButton from '../components/GoogleButton';
@@ -9,10 +9,12 @@ import { MONTHS } from '../lib/calc';
 import { profileStats } from '../lib/auth';
 import { getWebClientId, maskClientId } from '../lib/googleAuth';
 import { fmtWaktu } from '../components/DriveSheet';
+import { recentErrors, buildErrorReport } from '../lib/errors';
+import { writeCache, shareFile } from '../lib/files';
 
 const tgl = v => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v || ''); return m ? `${+m[3]} ${MONTHS[+m[2] - 1]} ${m[1]}` : '-'; };
 
-export default function ProfileScreen({ profile, onClose, onLogin, onLogout, onRename, onClientId, cfgTick, sessionOk, sync, onSyncNow, onReconnect }) {
+export default function ProfileScreen({ profile, onClose, onLogin, onLogout, onDeleteAccount, lockOn, onToggleLock, onRename, onClientId, cfgTick, sessionOk, sync, onSyncNow, onReconnect }) {
   const [busy, setBusy] = useState(false);
   const [act, setAct] = useState(null); // 'sync' | 'reconnect' | 'logout' sedang berjalan
   const clientId = useMemo(() => getWebClientId(), [cfgTick]);
@@ -22,10 +24,19 @@ export default function ProfileScreen({ profile, onClose, onLogin, onLogout, onR
   const version = (Constants.expoConfig && Constants.expoConfig.version) || '-';
 
   const login = async () => { setBusy(true); try { await onLogin(); } finally { setBusy(false); } };
+  const shareReport = async () => {
+    const errs = recentErrors();
+    if (!errs.length) { Alert.alert('Laporan error', 'Belum ada error yang tercatat sejak aplikasi dibuka.'); return; }
+    const uri = await writeCache('laporan-error-budget-planner.txt', buildErrorReport({ version, platform: `${Platform.OS} ${Platform.Version}`, errors: errs }));
+    await shareFile(uri, 'text/plain', 'Laporan error Budget Planner');
+  };
   const run = async (name, fn) => { if (act) return; setAct(name); try { await fn(); } finally { setAct(null); } };
   const logout = () => Alert.alert('Keluar dari akun?',
     'Perubahan terakhir diunggah ke Google Drive lebih dulu, lalu SEMUA data di HP ini (buku kas, kategori, transaksi) dikosongkan.\n\nMasuk lagi dengan akun yang sama untuk memulihkan data dari Google Drive.',
     [{ text: 'Batal', style: 'cancel' }, { text: 'Keluar', style: 'destructive', onPress: () => run('logout', onLogout) }]);
+  const del = () => Alert.alert('Hapus akun & semua data?',
+    'Semua cadangan Budget Planner di Google Drive Anda dihapus PERMANEN, izin aplikasi di akun Google dicabut, dan SEMUA data di HP ini dikosongkan.\n\nTindakan ini tidak bisa dibatalkan.',
+    [{ text: 'Batal', style: 'cancel' }, { text: 'Hapus permanen', style: 'destructive', onPress: () => run('delete', onDeleteAccount) }]);
   const startEdit = () => { setNama(profile.nama); setEditing(true); };
   const saveName = () => { if (!nama.trim()) return Alert.alert('Nama kosong', 'Isi nama tampilan terlebih dahulu.'); onRename(nama); setEditing(false); };
 
@@ -91,8 +102,8 @@ export default function ProfileScreen({ profile, onClose, onLogin, onLogout, onR
         {profile && (
           <View style={st.card}>
             <Text style={st.h}>Sinkron Google Drive</Text>
-            <Text style={[st.p, sync && sync.error ? { color: '#d63031' } : null]}>
-              {!sync ? '' : sync.error ? `⚠ Sinkron terakhir gagal: ${sync.error}`
+            <Text style={[st.p, sync && (sync.error || sync.conflict) ? { color: '#d63031' } : null]}>
+              {!sync ? '' : sync.conflict ? '⚠ Drive berisi perubahan dari perangkat lain. Ketuk Sinkronkan sekarang untuk memilih data mana yang dipakai.' : sync.error ? `⚠ Sinkron terakhir gagal: ${sync.error}`
                 : sync.last ? `Tersinkron ${fmtWaktu(sync.last)}${sync.pending ? ' • ada perubahan yang menunggu diunggah' : ''}`
                 : sync.pending ? 'Menunggu sinkron pertama.' : 'Belum ada data untuk disinkronkan.'}
             </Text>
@@ -112,6 +123,15 @@ export default function ProfileScreen({ profile, onClose, onLogin, onLogout, onR
         </View>
 
         <View style={st.card}>
+          <Text style={st.h}>Keamanan</Text>
+          <View style={[st.row, { borderBottomWidth: 0 }]}>
+            <Text style={st.k}>Kunci aplikasi</Text>
+            <Switch value={!!lockOn} onValueChange={v => run('lock', () => onToggleLock(v))} disabled={!!act} trackColor={{ true: NAVY }} accessibilityLabel="Kunci aplikasi" />
+          </View>
+          <Text style={st.p}>Meminta sidik jari/wajah, atau PIN/pola HP Anda, saat aplikasi dibuka dan setelah ditinggalkan lebih dari 1 menit. Memakai kunci layar HP, jadi tidak ada PIN terpisah yang bisa terlupa.</Text>
+        </View>
+
+        <View style={st.card}>
           <Text style={st.h}>Data di perangkat ini</Text>
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
             {[['Buku kas', stats.buku], ['Transaksi', stats.tx], ['Kategori', stats.kat]].map(([k, v]) => (
@@ -123,10 +143,13 @@ export default function ProfileScreen({ profile, onClose, onLogin, onLogout, onR
         <View style={st.card}>
           <Text style={st.h}>Tentang aplikasi</Text>
           <View style={st.row}><Text style={st.k}>Versi</Text><Text style={st.v}>{version}</Text></View>
+          <TouchableOpacity onPress={() => run('report', shareReport).catch(e => Alert.alert('Laporan gagal dibuat', String((e && e.message) || e)))} disabled={!!act} style={st.rep} accessibilityRole="button"><Text style={st.repT}>Bagikan laporan error</Text></TouchableOpacity>
         </View>
 
         {profile && (
           <TouchableOpacity onPress={logout} disabled={!!act} style={[st.logout, act && { opacity: 0.6 }]} accessibilityRole="button"><Text style={st.logoutT}>{act === 'logout' ? 'Menyimpan & keluar…' : 'Keluar dari akun'}</Text></TouchableOpacity>)}
+        {profile && (
+          <TouchableOpacity onPress={del} disabled={!!act} style={[st.del, act && { opacity: 0.6 }]} accessibilityRole="button"><Text style={st.delT}>{act === 'delete' ? 'Menghapus…' : 'Hapus akun & semua data'}</Text></TouchableOpacity>)}
       </ScrollView>
     </View>
   );
@@ -145,5 +168,7 @@ const st = StyleSheet.create({
   in: { borderWidth: 1, borderColor: '#b2bec3', borderRadius: 10, padding: 10, backgroundColor: '#fff', marginTop: 4, fontSize: 15 },
   btn: { flex: 1, borderRadius: 10, paddingVertical: 11, alignItems: 'center' }, btnT: { color: '#fff', fontWeight: '800' },
   stat: { flex: 1, backgroundColor: '#f4f7fa', borderRadius: 12, paddingVertical: 12, alignItems: 'center' }, statV: { fontSize: 20, fontWeight: '800', color: NAVY }, statK: { fontSize: 11, color: '#636e72', marginTop: 2 },
+  rep: { alignItems: 'center', padding: 10 }, repT: { color: NAVY, fontSize: 13, fontWeight: '700', textDecorationLine: 'underline' },
+  del: { alignItems: 'center', padding: 14, marginTop: 6 }, delT: { color: '#d63031', fontSize: 13, fontWeight: '700', textDecorationLine: 'underline' },
   logout: { borderWidth: 1.5, borderColor: '#d63031', borderRadius: 14, paddingVertical: 13, alignItems: 'center', marginTop: 4 }, logoutT: { color: '#d63031', fontWeight: '800', fontSize: 14 },
 });

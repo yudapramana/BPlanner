@@ -1,7 +1,7 @@
 import * as sqlite from './helpers/expo-sqlite';
 import { freshDb, raw, userVersion, rows, count, cat, tx } from './helpers/db';
 import { db, migrate, initDb, SCHEMA_VERSION, meta, setMeta, bid, setActiveBook, getBooks } from '../lib/db';
-import { SEED_CATS, SEED_TX } from '../lib/seed';
+import { SEED_CATS } from '../lib/seed';
 
 // Skema persis seperti aplikasi lama (v1.7.0 atau lebih tua): PRAGMA user_version masih 0, belum ada book_id / category_id / recurring.
 function legacyDb() {
@@ -76,7 +76,7 @@ describe('migrasi skema', () => {
     raw().exec('DROP TABLE recurring; DROP TABLE recurring_log; PRAGMA user_version = 2;');
     expect(userVersion()).toBe(2);
     migrate();
-    expect(userVersion()).toBe(3);
+    expect(userVersion()).toBe(SCHEMA_VERSION);
     expect(tables()).toEqual(expect.arrayContaining(['recurring', 'recurring_log']));
     expect(count('transactions')).toBe(1); expect(count('categories')).toBe(1);
   });
@@ -117,10 +117,11 @@ describe('initDb', () => {
     expect(getBooks()[0].nama).toBe('Buku Kas Utama');
     expect(bid()).toBe(1);
   });
-  test('data contoh Excel tidak pernah diisi otomatis (SEED_* hanya untuk Template Import dan seedAll manual)', () => {
+  test('tidak ada data pribadi di bundle: SEED_CATS hanya kategori umum dengan anggaran 0', () => {
     sqlite.__resetDb(); initDb(); initDb();
     expect(count('transactions')).toBe(0);
-    expect(SEED_TX.length).toBeGreaterThan(0); expect(Object.keys(SEED_CATS).length).toBe(5); // konstanta tetap ada untuk keperluan lain
+    expect(Object.keys(SEED_CATS).length).toBe(5);
+    expect(Object.values(SEED_CATS).flat().every(([, a]) => a === 0)).toBe(true);
   });
   test('dijalankan lagi tidak mengisi ulang, juga bila pengguna sudah mengosongkan semua kategori', () => {
     sqlite.__resetDb(); initDb();

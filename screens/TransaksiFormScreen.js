@@ -7,7 +7,8 @@ import { db, bid, getBook } from '../lib/db';
 import { JENIS, rp, GRAY, statusOf } from '../lib/calc';
 import useKeyboard from '../lib/useKeyboard';
 import { Chevron } from '../components/ui';
-import { deleteTransaction, makeRecurringFromTx } from '../lib/recurring';
+import { deleteTransaction, restoreTransaction, makeRecurringFromTx } from '../lib/recurring';
+import { reportError } from '../lib/errors';
 import { permissionState, askPermission } from '../lib/reminders';
 
 const ICON = { Pendapatan: '💰', Biaya: '🛒', Tagihan: '🧾', Pinjaman: '🏦', 'Investasi/Tabungan': '🌱' };
@@ -58,7 +59,14 @@ export default function TransaksiFormScreen({ tx, onClose, onSaved, notify, bump
     notify(`✔ ${sel.nama} ${rp(nom)} ${editing ? 'diperbarui' : 'tersimpan'}${!editing && rep ? ' • diulang tiap bulan' : ''}`);
     if (again && !editing) { setF({ ...f, catId: null, nominal: '', ket: '' }); setRep(false); setTried(false); } else onClose();
   };
-  const del = () => Alert.alert('Hapus transaksi?', `${tx.kategori} ${rp(tx.nominal)}`, [{ text: 'Batal' }, { text: 'Hapus', style: 'destructive', onPress: () => { deleteTransaction(tx.id); bump(); notify('Transaksi dihapus'); onClose(); } }]);
+  const del = () => Alert.alert('Hapus transaksi?', `${tx.kategori} ${rp(tx.nominal)}`, [{ text: 'Batal' }, { text: 'Hapus', style: 'destructive', onPress: () => {
+    const snap = deleteTransaction(tx.id); bump();
+    notify('Transaksi dihapus', snap ? { label: 'Urungkan', onPress: () => {
+      let ok = false; try { ok = restoreTransaction(snap); } catch (e) { reportError('urungkan', e); }
+      bump(); notify(ok ? '✔ Transaksi dikembalikan' : 'Tidak bisa dikembalikan');
+    } } : undefined);
+    onClose();
+  } }]);
 
   return (
     <View ref={wrapRef} collapsable={false} style={{ flex: 1, backgroundColor: BG }}>

@@ -15,8 +15,8 @@ import ProfileScreen from './screens/ProfileScreen';
 import WelcomeScreen from './screens/WelcomeScreen';
 import Avatar from './components/Avatar';
 import { getProfile, saveGoogleProfile, renameProfile, clearProfile, welcomeDone, setWelcomeDone } from './lib/auth';
-import { signInWithGoogle, signOutGoogle, authMessage, getDriveToken, sessionActive, hasWebClientId } from './lib/googleAuth';
-import { loginSync, autoSync, syncNow, beforeLogout, syncStatus } from './lib/driveSync';
+import { signInWithGoogle, signOutGoogle, revokeGoogle, authMessage, getDriveToken, sessionActive, hasWebClientId } from './lib/googleAuth';
+import { loginSync, autoSync, syncNow, beforeLogout, syncStatus, deleteDriveData } from './lib/driveSync';
 import { autoBackup, clearAutoBackups } from './lib/backup';
 import ClientIdSheet from './components/ClientIdSheet';
 import { fmtWaktu } from './components/DriveSheet';
@@ -24,6 +24,8 @@ import BerulangScreen from './screens/BerulangScreen';
 import { processRecurring } from './lib/recurring';
 import { initNotifications, syncReminders, onReminderTap } from './lib/reminders';
 import ErrorBoundary, { ErrorFallback } from './components/ErrorBoundary';
+import LockScreen from './components/LockScreen';
+import { isLockEnabled, setLockEnabled, deviceLockAvailable, authenticate, authBusy, shouldLock, applyScreenPrivacy } from './lib/lock';
 import { reportError } from './lib/errors';
 
 // Gagal membuka / memigrasi database tidak boleh membuat aplikasi mati tanpa penjelasan. Migrasi berjalan dalam transaksi,
@@ -31,6 +33,7 @@ import { reportError } from './lib/errors';
 let bootError = null;
 try { initDb(); } catch (e) { bootError = e; reportError('initDb', e); }
 try { initNotifications(); } catch (e) { reportError('initNotifications', e); } // pengingat saja yang mati
+if (!bootError) applyScreenPrivacy(); // kunci aktif -> layar disembunyikan di daftar aplikasi terbaru & tangkapan layar diblokir
 
 const AUTO_DELAY_MS = 45000; // sinkron otomatis berjalan 45 detik setelah perubahan terakhir (debounce)
 const firstLine = e => String((e && e.message) || e || '').split('\n')[0];
@@ -47,6 +50,7 @@ function Main() {
   const [form, setForm] = useState(null); // null = tertutup, { tx } = form tambah (tx null) / edit
   const [hide, setHide] = useState(true); // data keuangan tertutup setiap kali aplikasi dibuka
   const [toast, setToast] = useState(null);
+  const [toastAct, setToastAct] = useState(null); // tombol di toast, mis. Urungkan: { label, onPress }
   const [sheet, setSheet] = useState(false); // panel pemilih Buku Kas
   const [profile, setProfile] = useState(getProfile); // null = belum masuk
   const [profileOpen, setProfileOpen] = useState(false);
@@ -56,9 +60,12 @@ function Main() {
   const [cfgTick, setCfgTick] = useState(0); // dinaikkan setiap Web Client ID berubah
   const [sessionOk, setSessionOk] = useState(null); // null = belum diperiksa; false = sesi Google terputus
   const [syncTick, setSyncTick] = useState(0); // dinaikkan setiap status sinkron Drive berubah
+  const [lockOn, setLockOn] = useState(isLockEnabled); // pengaturan Kunci aplikasi
+  const [locked, setLocked] = useState(isLockEnabled); // terkunci sejak aplikasi dibuka bila pengaturan aktif
+  const [lockEpoch, setLockEpoch] = useState(0); // naik tiap terkunci: layar tab dimuat ulang agar panel/jendela yang terbuka ikut tertutup
   const timer = useRef(null);
 
-  const notify = msg => { setToast(msg); clearTimeout(timer.current); timer.current = setTimeout(() => setToast(null), 2200); };
+  const notify = (msg, act) => { setToast(msg); setToastAct(act || null); clearTimeout(timer.current); timer.current = setTimeout(() => { setToast(null); setToastAct(null); }, act ? 6000 : 2200); };
   const book = getBook(); // buku kas aktif (dibaca ulang setiap render; murah)
   const switchBook = id => { setActiveBook(id); setTick(t => t + 1); setSheet(false); };
   const openForm = tx => setForm({ tx: tx || null });
@@ -76,6 +83,14 @@ function Main() {
     const what = remote.buku ? `${remote.buku} buku kas, ${remote.tx} transaksi, ` : '';
     Alert.alert('Data ditemukan di Google Drive',
       `Drive akun ini berisi data (${what}${fmtWaktu(remote.modifiedTime || remote.createdTime)}), dan HP ini juga sudah berisi data.\n\n• Gabungkan: data HP dan Drive disatukan (transaksi kembar dilewati).\n• Pakai Drive: data HP diganti data Drive (salinan data HP dibuat otomatis lebih dulu).\n• Pakai HP: data di Drive ditimpa data HP ini.\n\nKetuk di luar kotak ini untuk membatalkan.`,
+      [{ text: 'Gabungkan', onPress: () => resolve('merge') }, { text: 'Pakai Drive', style: 'destructive', onPress: () => resolve('replace') }, { text: 'Pakai HP', onPress: () => resolve('local') }],
+      { cancelable: true, onDismiss: () => resolve(null) });
+  });
+  // Dipanggil bila file sinkron di Drive diubah perangkat lain sejak sinkron terakhir HP ini. Hasil: 'merge' | 'replace' | 'local' | null (dibatalkan)
+  const askSyncConflict = remote => new Promise(resolve => {
+    const what = remote.buku ? `${remote.buku} buku kas, ${remote.tx} transaksi, ` : '';
+    Alert.alert('Drive diubah dari perangkat lain',
+      `File sinkron di Google Drive (${what}${fmtWaktu(remote.modifiedTime)}) berbeda dengan yang terakhir dikenal HP ini.\n\n• Gabungkan: data HP dan Drive disatukan (transaksi kembar dilewati)\n• Pakai Drive: data HP diganti isi Drive (salinan pengaman dibuat)\n• Pakai HP: isi Drive ditimpa data HP`,
       [{ text: 'Gabungkan', onPress: () => resolve('merge') }, { text: 'Pakai Drive', style: 'destructive', onPress: () => resolve('replace') }, { text: 'Pakai HP', onPress: () => resolve('local') }],
       { cancelable: true, onDismiss: () => resolve(null) });
   });
@@ -100,7 +115,7 @@ function Main() {
       return true;
     } catch (e) {
       await abort();
-      Alert.alert('Gagal menyambungkan Google Drive', `${firstLine(e)}\n\nAkun belum dihubungkan dan data di HP tidak diubah.`);
+      reportError('loginSync', e); Alert.alert('Gagal menyambungkan Google Drive', `${firstLine(e)}\n\nAkun belum dihubungkan dan data di HP tidak diubah.`);
       return false;
     }
   };
@@ -137,9 +152,22 @@ function Main() {
     setTick(t => t + 1); setSyncTick(t => t + 1);
     notify('Anda telah keluar. Data di HP dikosongkan');
   };
+  // Hapus akun: file di Drive dihapus PERMANEN dulu. Bila gagal (mis. tanpa internet) tidak ada yang diubah di HP; baru setelah berhasil izin Google dicabut dan data HP dikosongkan.
+  const deleteAccount = async () => {
+    try { await deleteDriveData(); }
+    catch (e) { reportError('deleteAccount', e); Alert.alert('Penghapusan gagal', `${firstLine(e)}\n\nData di HP tidak diubah. Periksa koneksi lalu coba lagi.`); return; }
+    await revokeGoogle();
+    clearAutoBackups();
+    resetAllData();
+    setProfile(null); setProfileOpen(false); setForm(null); setRecOpen(false); setSheet(false);
+    setTick(t => t + 1); setSyncTick(t => t + 1);
+    notify('Akun dan semua data telah dihapus');
+  };
   const syncNowUi = async () => {
-    try { const r = await syncNow(); notify(`✔ Tersinkron: ${r.info.buku} buku kas, ${r.info.tx} transaksi`); }
-    catch (e) { Alert.alert('Sinkron gagal', firstLine(e)); }
+    try {
+      const r = await syncNow({ ask: askSyncConflict });
+      if (r.action === 'cancel') notify('Dibatalkan'); else afterSync(r, 'Tersinkron');
+    } catch (e) { reportError('syncNow', e); Alert.alert('Sinkron gagal', firstLine(e)); }
     setSyncTick(t => t + 1);
   };
   const onClientSaved = r => {
@@ -147,6 +175,37 @@ function Main() {
     if (r.changed && getProfile()) Alert.alert('Web Client ID diganti', 'Sesi Google lama diputus. Buka Profil lalu ketuk Hubungkan ulang. Data di HP tidak dihapus.');
     else notify(r.empty ? 'Web Client ID dikosongkan' : r.changed ? '✔ Web Client ID disimpan' : 'Web Client ID tidak berubah');
   };
+  // ---- Kunci aplikasi (kunci layar HP: sidik jari / wajah / PIN / pola) ----
+  const unlock = r => {
+    setLocked(false);
+    if (r && r.disabled) { setLockOn(false); notify('Kunci aplikasi dimatikan karena HP tidak punya kunci layar'); }
+  };
+  const toggleLock = async want => {
+    if (want) {
+      if (!(await deviceLockAvailable())) {
+        Alert.alert('Kunci layar HP belum diatur', 'Atur PIN, pola, kata sandi, atau sidik jari/wajah di Pengaturan HP dulu. Aplikasi memakai kunci layar yang sama dengan HP Anda.');
+        return false;
+      }
+      const r = await authenticate('Aktifkan kunci aplikasi'); // pastikan kunci benar-benar bisa dipakai sebelum dinyalakan
+      if (!r.ok) return false;
+      setLockEnabled(true); setLockOn(true); notify('✔ Kunci aplikasi aktif'); return true;
+    }
+    const r = await authenticate('Matikan kunci aplikasi');
+    if (!r.ok) return false;
+    setLockEnabled(false); setLockOn(false); notify('Kunci aplikasi dimatikan'); return true;
+  };
+  const bgAt = useRef(null); const lockOnRef = useRef(lockOn); lockOnRef.current = lockOn;
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', st => {
+      if (st === 'background') { if (!authBusy()) bgAt.current = Date.now(); }
+      else if (st === 'active') {
+        const t = bgAt.current; bgAt.current = null;
+        if (lockOnRef.current && !authBusy() && shouldLock(t)) { setSheet(false); setClientOpen(false); setHide(true); setLockEpoch(e => e + 1); setLocked(true); }
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   const rename = n => { renameProfile(n); setProfile(getProfile()); notify('✔ Nama diperbarui'); };
   const finishWelcome = () => { setWelcomeDone(); setWelcome(false); };
 
@@ -157,7 +216,11 @@ function Main() {
   const runAuto = async () => {
     const r = await autoSync();
     if (r.status === 'ok') { lastAutoErr.current = ''; setSyncTick(t => t + 1); }
-    else if (r.status === 'error') {
+    else if (r.status === 'conflict') {
+      setSyncTick(t => t + 1);
+      if (lastAutoErr.current !== 'conflict') { lastAutoErr.current = 'conflict'; notify('⚠ Drive diubah dari perangkat lain. Buka Profil › Sinkronkan sekarang.'); }
+    } else if (r.status === 'error') {
+      reportError('autoSync', r.error);
       const m = firstLine(r.error);
       if (m !== lastAutoErr.current) { lastAutoErr.current = m; notify(`⚠ Sinkron Drive gagal: ${m}`.slice(0, 90)); }
       setSyncTick(t => t + 1);
@@ -200,6 +263,7 @@ function Main() {
   // Tombol back Android: tutup form -> kembali ke Dashboard -> baru keluar
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (locked) { BackHandler.exitApp(); return true; }
       if (form) { setForm(null); return true; }
       if (recOpen) { setRecOpen(false); return true; }
       if (profileOpen) { setProfileOpen(false); return true; }
@@ -207,13 +271,16 @@ function Main() {
       return false;
     });
     return () => sub.remove();
-  }, [form, tab, profileOpen, recOpen]);
+  }, [form, tab, profileOpen, recOpen, locked]);
 
   const P = { y, m, setY, setM, tick, hide, toggleHide: () => setHide(h => !h), goTab: setTab, openForm, profile, openProfile: () => setProfileOpen(true), notify, bump: () => setTick(t => t + 1), openRec: () => setRecOpen(true) };
   const Screen = TABS[tab][2];
   return (
     <View style={{ flex: 1, backgroundColor: BG }}>
       <StatusBar style="dark" />
+      {/* Saat terkunci: isi aplikasi disembunyikan dari pembaca layar (TalkBack) dan layar tab tidak dimuat,
+          jadi data keuangan tidak terbaca di balik layar kunci. Form/profil yang terbuka tetap terjaga isinya. */}
+      <View style={{ flex: 1 }} importantForAccessibility={locked ? 'no-hide-descendants' : 'auto'} accessibilityElementsHidden={locked}>
       <View style={{ height: insets.top, backgroundColor: BG }} />
       {/* Header: pemilih Buku Kas aktif (ketuk untuk ganti / tambah buku kas) */}
       <View style={[s.head, { flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
@@ -236,7 +303,7 @@ function Main() {
       <View style={{ flex: 1 }}>
         {/* Satu layar yang error tidak mematikan menu & pemilih buku; berpindah tab / bulan / buku kas mencoba render ulang */}
         <ErrorBoundary label={`tab:${TABS[tab][0]}`} resetKeys={[tab, book.id, y, m, tick]} title={`Layar ${TABS[tab][0]} bermasalah`}>
-          <Screen {...P} />
+          {locked ? null : <Screen key={lockEpoch} {...P} />}
         </ErrorBoundary>
       </View>
       {/* Menu bawah: 2 menu | slot tengah (tombol Transaksi menonjol) | 2 menu. Ikon di atas, label di bawah. */}
@@ -286,7 +353,7 @@ function Main() {
       {profileOpen && (
         <View style={{ position: 'absolute', top: insets.top, left: 0, right: 0, bottom: 0, backgroundColor: BG }}>
           <ErrorBoundary label="profil" onReset={() => setProfileOpen(false)} retryLabel="Tutup" title="Halaman profil bermasalah">
-            <ProfileScreen profile={profile} onClose={() => setProfileOpen(false)} onLogin={loginGoogle} onLogout={logout} onRename={rename}
+            <ProfileScreen profile={profile} onClose={() => setProfileOpen(false)} onLogin={loginGoogle} onLogout={logout} onDeleteAccount={deleteAccount} lockOn={lockOn} onToggleLock={toggleLock} onRename={rename}
               onClientId={() => setClientOpen(true)} cfgTick={cfgTick} sessionOk={sessionOk} sync={syncInfo} onSyncNow={syncNowUi} onReconnect={reconnect} />
           </ErrorBoundary>
         </View>)}
@@ -297,9 +364,20 @@ function Main() {
       <ClientIdSheet visible={clientOpen} hasSession={!!profile} onClose={() => setClientOpen(false)} onSaved={onClientSaved} />
 
       {toast && (
-        <View pointerEvents="none" style={{ position: 'absolute', top: insets.top + 64, left: 0, right: 0, alignItems: 'center' }}>
-          <View style={s.toast}><Text style={s.toastT}>{toast}</Text></View>
+        <View pointerEvents={toastAct ? 'box-none' : 'none'} style={{ position: 'absolute', top: insets.top + 64, left: 0, right: 0, alignItems: 'center' }}>
+          <View style={[s.toast, toastAct && { flexDirection: 'row', alignItems: 'center' }]}>
+            <Text style={[s.toastT, toastAct && { flexShrink: 1 }]}>{toast}</Text>
+            {toastAct && (
+              <TouchableOpacity hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} accessibilityRole="button" style={{ marginLeft: 16 }}
+                onPress={() => { const a = toastAct; clearTimeout(timer.current); setToast(null); setToastAct(null); a.onPress(); }}>
+                <Text style={[s.toastT, { color: '#74b9ff', textDecorationLine: 'underline' }]}>{toastAct.label}</Text>
+              </TouchableOpacity>)}
+          </View>
         </View>)}
+      </View>
+
+      {/* Kunci aplikasi: lapisan paling atas, menutup semua layar sampai autentikasi berhasil */}
+      {locked && <LockScreen onUnlock={unlock} />}
     </View>
   );
 }

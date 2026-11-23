@@ -1,11 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Modal, Pressable } from 'react-native';
 import { s, NAVY, GCOL } from '../theme';
-import { Btn, Section, MonthPicker, Chevron } from '../components/ui';
+import { Btn, Section, MonthPicker, Chevron, Chips } from '../components/ui';
 import Donut from '../components/Donut';
 import BarChart from '../components/BarChart';
 import { MONTHS, MONTHS_SHORT, rp, rpk, pct, ym, expenseYear, expenseByCategory } from '../lib/calc';
 import { shareSheets, askFormat, failAlert } from '../lib/excel';
+
+// Rentang rincian per kategori: [label chip, kode]
+const SCOPES = [['Bulan', 'Bulan'], ['Tahun', 'Tahun'], ['Semua waktu', 'Semua']];
 
 const PALETTE = ['#0984e3', '#e17055', '#00b894', '#6c5ce7', '#fdcb6e', '#e84393', '#00cec9', '#d63031', '#14365d', '#a29bfe', '#55efc4', '#636e72'];
 
@@ -43,8 +46,9 @@ function MonthSheet({ visible, y, m, onPick, onClose }) {
 
 export default function ExpensesScreen({ y, m, setY, setM, tick }) {
   const [pick, setPick] = useState(false);
+  const [scope, setScope] = useState('Bulan'); // rentang rincian per kategori
   const year = useMemo(() => expenseYear(y), [y, tick]);
-  const cats = useMemo(() => expenseByCategory(y, m), [y, m, tick]);
+  const cats = useMemo(() => expenseByCategory(y, m, scope), [y, m, scope, tick]);
   const cur = year[m - 1];
   const yearTotal = year.reduce((a, r) => a + r.total, 0);
   const total = cur.total;
@@ -52,10 +56,13 @@ export default function ExpensesScreen({ y, m, setY, setM, tick }) {
   const now = new Date();
 
   const items = cats.map((c, i) => ({ ...c, key: c.jenis + c.nama, color: PALETTE[i % PALETTE.length] }));
+  const catTotal = items.reduce((a, c) => a + c.value, 0); // total rentang yang dipilih (bulan / tahun / semua waktu)
+  const catCount = items.reduce((a, c) => a + c.n, 0);
+  const scopeLabel = scope === 'Semua' ? 'Semua waktu' : scope === 'Tahun' ? `Tahun ${y}` : `${MONTHS[m - 1]} ${y}`;
 
   const doExport = format => shareSheets(`Pengeluaran_${y}`, [
-    { name: `Per Bulan ${y}`, rows: [['Bulan', 'Biaya', 'Tagihan', 'Pinjaman', 'Total Pengeluaran'], ...year.map(r => [r.bulan, r.biaya, r.tagihan, r.pinjaman, r.total]), ['TOTAL', ...['biaya', 'tagihan', 'pinjaman', 'total'].map(k => year.reduce((a, r) => a + r[k], 0))]] },
-    { name: `Kategori ${MONTHS[m - 1]}`.slice(0, 31), rows: [['Kelompok', 'Kategori', 'Jumlah', '%'], ...items.map(c => [c.jenis, c.nama, c.value, total > 0 ? pct(c.value / total) : ''])] },
+    { name: `Per Bulan ${y}`, rows: [['Bulan', 'Biaya', 'Tagihan', 'Pinjaman', 'Investasi/Tabungan', 'Total Pengeluaran'], ...year.map(r => [r.bulan, r.biaya, r.tagihan, r.pinjaman, r.tab, r.total]), ['TOTAL', ...['biaya', 'tagihan', 'pinjaman', 'tab', 'total'].map(k => year.reduce((a, r) => a + r[k], 0))]] },
+    { name: `Kategori ${scopeLabel}`.slice(0, 31), rows: [['Kelompok', 'Kategori', 'Transaksi', 'Jumlah', '%'], ...items.map(c => [c.jenis, c.nama, c.n, c.value, catTotal > 0 ? pct(c.value / catTotal) : '']), ['TOTAL', '', catCount, catTotal, '']] },
   ], format).catch(failAlert('Export gagal'));
 
   return (
@@ -81,13 +88,16 @@ export default function ExpensesScreen({ y, m, setY, setM, tick }) {
         <Text style={[s.leg, { marginTop: 8, textAlign: 'center', color: '#636e72' }]}>Ketuk batang untuk memilih bulan</Text>
       </Section>
 
-      <Section title={`Per Kategori • ${MONTHS[m - 1]} ${y}`}>
+      <Section title={`Per Kategori • ${scopeLabel}`}>
+        <Chips items={SCOPES.map(x => x[0])} value={SCOPES.find(x => x[1] === scope)[0]} onPick={v => setScope(SCOPES.find(x => x[0] === v)[1])} />
         {items.length === 0 ? (
-          <Text style={[s.rv, { textAlign: 'center', paddingVertical: 20 }]}>Belum ada pengeluaran di bulan ini.</Text>
+          <Text style={[s.rv, { textAlign: 'center', paddingVertical: 20 }]}>{scope === 'Bulan' ? 'Belum ada pengeluaran di bulan ini.' : scope === 'Tahun' ? `Belum ada pengeluaran di tahun ${y}.` : 'Belum ada pengeluaran.'}</Text>
         ) : (
           <>
+            {/* Total persis (bukan ringkas) + jumlah transaksi: untuk dicocokkan dengan catatan lain, mis. riwayat Tring */}
+            <Text style={[s.rv, { textAlign: 'center', marginBottom: 10 }]}>Total {rp(catTotal)}  •  {catCount} transaksi</Text>
             <View style={{ alignItems: 'center', marginBottom: 14 }}>
-              <Donut size={180} stroke={30} top="Total" bottom={rpk(total)} data={items.map(c => ({ key: c.key, value: c.value, color: c.color }))} />
+              <Donut size={180} stroke={30} top="Total" bottom={rpk(catTotal)} data={items.map(c => ({ key: c.key, value: c.value, color: c.color }))} />
             </View>
             {items.map(c => (
               <View key={c.key} style={{ marginBottom: 12 }}>
@@ -96,8 +106,8 @@ export default function ExpensesScreen({ y, m, setY, setM, tick }) {
                   <Text style={[s.txMain, { flex: 1 }]} numberOfLines={1}>{c.nama}</Text>
                   <Text style={s.txAmt}>{rp(c.value)}</Text>
                 </View>
-                <View style={[s.track, { height: 6, marginTop: 2 }]}><View style={{ width: (c.value / total) * 100 + '%', height: 6, backgroundColor: c.color, borderRadius: 3 }} /></View>
-                <Text style={s.txSub}>{c.jenis} • {pct(c.value / total)}</Text>
+                <View style={[s.track, { height: 6, marginTop: 2 }]}><View style={{ width: (c.value / catTotal) * 100 + '%', height: 6, backgroundColor: c.color, borderRadius: 3 }} /></View>
+                <Text style={s.txSub}>{c.jenis} • {c.n} transaksi • {pct(c.value / catTotal)}</Text>
               </View>))}
           </>)}
       </Section>

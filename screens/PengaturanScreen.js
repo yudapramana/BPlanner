@@ -75,7 +75,7 @@ export default function PengaturanScreen({ tick, bump, notify, profile, openProf
         Alert.alert('Import backup semua buku', `File berisi ${ins.info.buku} buku kas, ${ins.info.kat} kategori, ${ins.info.tx} transaksi.\n\nGabung: buku kas bernama sama digabung (transaksi kembar dilewati), buku lain ditambahkan.\nGanti Semua: SEMUA ${n} buku kas di aplikasi ini dihapus lalu diganti isi file. Salinan data lama dibuat otomatis lebih dulu.`, [
           { text: 'Batal', style: 'cancel' }, { text: 'Gabung', onPress: () => finish(ins, false) }, { text: 'Ganti Semua', style: 'destructive', onPress: () => finish(ins, true) }]);
       } else {
-        Alert.alert('Import dari file CSV', `File berisi ${ins.info.kat} baris kategori dan ${ins.info.tx} baris transaksi, masuk ke buku kas "${bk}".\n\nGabung: tambahkan data file ke data yang ada (transaksi kembar dilewati).\nGanti Semua: hapus semua data buku kas ini lalu isi dari file. Salinan data lama dibuat otomatis lebih dulu.`, [
+        Alert.alert('Import dari file CSV', `File berisi ${ins.info.kat} baris kategori dan ${ins.info.tx} baris transaksi, masuk ke buku kas "${bk}".\n\nGabung: tambahkan data file ke data yang ada (transaksi kembar dilewati).\nGanti Semua: hapus semua data buku kas ini lalu isi dari file. Transaksi berulang buku kas ini ikut terhapus dan tidak bisa dikembalikan dari file CSV. Salinan data lama dibuat otomatis lebih dulu.`, [
           { text: 'Batal', style: 'cancel' }, { text: 'Gabung', onPress: () => finish(ins, false) }, { text: 'Ganti Semua', style: 'destructive', onPress: () => finish(ins, true) }]);
       }
   };

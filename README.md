@@ -1,11 +1,12 @@
-# Monthly Budget Planner (Android) v1.13.0 — Expo SDK 58
+# Monthly Budget Planner (Android) v1.14.0 — Expo SDK 58
 
 ## Struktur
 - `App.js` — navigasi bawah + state bulan/tahun; menjalankan pencatatan otomatis & penjadwalan pengingat (`refreshRecurring`)
 - `screens/` — DashboardScreen (angka bisa disembunyikan lewat ikon mata), TransaksiScreen (daftar transaksi), ExpensesScreen (bar chart 12 bulan + donat per kategori), PengaturanScreen (tab "Anggaran") (kategori + backup), TransaksiFormScreen, BerulangScreen (daftar & form transaksi berulang + pengaturan pengingat)
-- `components/` — ui.js (Card, Btn, Chips, Prog, Section, MonthPicker pil ringkas), BarChart.js, Donut.js, EyeIcon.js, DateField.js (date picker), MasterSheet.js (pilih kategori dari master), BookSheet.js (Buku Kas), ErrorBoundary.js (pelindung kesalahan layar + layar pengganti)
-- `lib/` — db.js (SQLite, migrasi bernomor, kategori), seed.js (data awal Excel), master.js (master kategori 5 kelompok), calc.js (rumus), csv.js, backup.js (export/import CSV & JSON, backup otomatis), excel.js (.xlsx/CSV), files.js, recurring.js (transaksi berulang), reminders.js (notifikasi pengingat), errors.js (pembantu penanganan error)
+- `components/` — ui.js (Card, Btn, Chips, Prog, Section, MonthPicker pil ringkas), BarChart.js, Donut.js, EyeIcon.js, DateField.js (date picker), MasterSheet.js (pilih kategori dari master), BookSheet.js (Buku Kas), ErrorBoundary.js (pelindung kesalahan layar + layar pengganti), LockScreen.js (layar Kunci aplikasi)
+- `lib/` — db.js (SQLite, migrasi bernomor, kategori), seed.js (kategori umum untuk Template Import, anggaran Rp 0; tanpa data pribadi), master.js (master kategori 5 kelompok), calc.js (rumus), csv.js, backup.js (export/import CSV & JSON, backup otomatis), excel.js (.xlsx/CSV), files.js, recurring.js (transaksi berulang), reminders.js (notifikasi pengingat), errors.js (pembantu penanganan error), googleAuth.js / auth.js (login Google), drive.js / driveSync.js (Google Drive: cadangan & sinkron), lock.js (Kunci aplikasi)
 - `tests/` — pengujian otomatis (Jest): rumus, CSV, migrasi, backup/import, transaksi berulang, pengingat, ErrorBoundary. Lihat bagian Pengujian di bawah
+- `plugins/withReleaseSigning.js` — config plugin: tanda tangan rilis dari variabel lingkungan (dipakai GitHub Actions)
 - `theme.js` — warna & style bersama
 
 ## Menjalankan di laptop (tanpa Android Studio)
@@ -17,7 +18,7 @@ Uji bundling saja: `npx expo export --platform android`.
 Jalankan pengujian: `npm test` (lihat bagian Pengujian).
 
 ## Build APK
-Push ke GitHub (branch main/master) → tab Actions → Build APK → unduh artifact `app-release.apk`.
+Push ke GitHub (branch main/master) → tab Actions → Build APK → unduh artifact `budget-planner-apk` (APK) atau `budget-planner-aab` (AAB untuk Play Store). Penandatanganan rilis: lihat v1.14.0.
 
 ## Backup & Restore
 Anggaran → (bagian bawah) Data & Backup:
@@ -105,13 +106,15 @@ Tes juga dijalankan otomatis di GitHub Actions sebelum APK dibuild; bila ada yan
 |---|---|
 | `calc.test.js` | Format rupiah, status 80%/100% (`statusOf`), `monthData` (saldo, rasio tabungan, "terpakai"), `yearData`, `highlights`, pengeluaran per kategori, isolasi antar buku kas |
 | `csv.test.js` | Parser CSV (koma/titik koma, kutip, baris baru), `parseNom`, `normJenis`, `normDate` (termasuk menolak tanggal mustahil) |
-| `migrations.test.js` | DB kosong → versi terbaru; **dari DB lama (v1.7.0, user_version 0)**: kategori kembar digabung, `category_id` terisi, tidak ada baris hilang; migrasi gagal = dibatalkan total; DB dari app yang lebih baru tidak disentuh; `initDb` tidak mengisi ulang data contoh |
+| `migrations.test.js` | DB kosong → versi terbaru; **dari DB lama (v1.7.0, user_version 0)**: kategori kembar digabung, `category_id` terisi, tidak ada baris hilang; migrasi gagal = dibatalkan total; DB dari app yang lebih baru tidak disentuh; `initDb` tidak mengisi ulang data contoh; tidak ada data pribadi di `SEED_CATS` |
 | `db.test.js` | Transaksi bersarang & rollback, kategori (tambah/ganti nama/hapus), buku kas (tambah/salin/hapus), saldo |
 | `backup.test.js` | **Backup → Pulihkan = data persis sama** (termasuk berulang + log, transaksi yatim, nominal 0, buku aktif); Gabung tidak menggandakan; file rusak/versi lebih baru ditolak sebelum menyentuh data; **import yang gagal di tengah tidak merusak data lama**; backup otomatis gagal = import dibatalkan; CSV roundtrip; retensi 10 backup otomatis |
 | `recurring.test.js` | Tanggal jatuh tempo (29–31, kabisat), pencatatan otomatis tidak pernah ganda, mengejar bulan terlewat (maks. 60), skip, atomik, `pendingList`, ambang 80%/100% |
 | `reminders.test.js` | Jadwal notifikasi (H-n, hari-H, H+2, pukul 09.00), masking nominal, batas 60 |
 | `googleAuth.test.js` | Web Client ID diisi di aplikasi (validasi format, dibersihkan, ID baru langsung dipakai, sesi lama diputus saat ID berganti, bertahan setelah keluar akun), izin Drive interaktif vs senyap, `resetAllData` |
-| `driveSync.test.js` | Sinkron otomatis (hanya saat berubah, tidak mengunggah data kosong, batas harian, gagal/pulih), alur masuk (Drive kosong / HP kosong / dua-duanya berisi / dibatalkan / file rusak), keluar akun, dan alur lengkap masuk → catat → keluar → masuk lagi = data kembali |
+| `driveSync.test.js` | Sinkron otomatis (hanya saat berubah, tidak mengunggah data kosong, batas harian, gagal/pulih), alur masuk (Drive kosong / HP kosong / dua-duanya berisi / dibatalkan / file rusak), keluar akun, dan alur lengkap masuk → catat → keluar → masuk lagi = data kembali. Sejak v1.14.0: revisi data lewat trigger (naik untuk semua jenis perubahan, tidak untuk meta; tanpa snapshot saat cek), perubahan saat unggah tetap tertunda, pemasangan lama, serta konflik Drive diubah HP lain (auto berhenti, pilih Gabung / Pakai Drive / Pakai HP, batal, keluar akun) |
+| `driveDelete.test.js` | Hapus akun: semua file aplikasi di Drive dihapus permanen, Drive kosong, 404 dianggap sudah terhapus, error lain dilempar (penghapusan di HP dibatalkan) |
+| `lock.test.js` | Kunci aplikasi: pengaturan tersimpan dan tidak terhapus saat keluar akun, ketersediaan kunci layar HP, hasil autentikasi (berhasil/batal/error), penanda sibuk, batas waktu kunci ulang |
 | `errorBoundary.test.js` | ErrorBoundary merender komponen sungguhan: menangkap error, "Coba lagi", reset otomatis saat ganti tab/bulan/buku, bersarang, tombol cadangan |
 
 **Cara kerjanya.** `expo-sqlite` diganti (lewat `moduleNameMapper` di `package.json`) oleh `tests/helpers/expo-sqlite.js` yang menjalankan **SQLite asli** (sql.js, WASM, tanpa modul native), jadi SQL di `lib/*.js` benar-benar dieksekusi, bukan di-mock. Modul native lain (file system, share, document picker) diganti versi di memori. Tidak ada file di folder aplikasi (`lib/`, `screens/`, dst.) yang diubah demi pengujian.
@@ -150,7 +153,39 @@ Tes juga dijalankan otomatis di GitHub Actions sebelum APK dibuild; bila ada yan
 
 **Catatan penting**
 - Scope `drive.file` hanya melihat file yang dibuat oleh **project Google Cloud yang sama**. Saat mengganti Web Client ID, buat client baru di project yang sama bila cadangan lama harus tetap terbaca. Bila project baru, cadangan lama di Drive tidak terlihat; data di HP tetap ada dan akan diunggah ulang ke file baru.
-- Ini sinkron satu arah per perangkat (HP → Drive, ditimpa terakhir menang), bukan penggabungan dua arah otomatis. Memakai dua HP sekaligus dengan akun yang sama: yang terakhir menyimpan menang. Riwayat versi file masih bisa dilihat di Drive (Kelola versi) dan cadangan manual tidak ditimpa.
+- Ini sinkron satu arah per perangkat (HP → Drive), bukan penggabungan dua arah otomatis. Sejak v1.14.0 penimpaan antar-HP dicegah dengan pemeriksaan sebelum mengunggah (lihat v1.14.0 butir 6); sebelumnya yang terakhir menyimpan menang. Riwayat versi file masih bisa dilihat di Drive (Kelola versi) dan cadangan manual tidak ditimpa.
 - Tidak ada modul native baru; build lama yang sudah memuat Google Sign-In (v1.9.0+) cukup di-update. Tidak ada migrasi skema baru.
 - Tes baru: `googleAuth.test.js`, `driveSync.test.js` (lihat tabel di atas).
 
+## v1.14.0 — Siap rilis: data bersih, build bertanda tangan, hapus akun, sinkron lebih aman, kunci aplikasi
+**1. Tanpa data pribadi di aplikasi.** `lib/seed.js` tidak lagi memuat data contoh: `SEED_TX` dan `seedAll` dihapus; `SEED_CATS` kini berisi kategori umum dari master dengan anggaran Rp 0 (dipakai Template Import), dan `JENIS` memberi urutan 5 kelompok. Tes menjaga agar semua anggaran di `SEED_CATS` tetap 0.
+
+**2. Ikon & splash.** `app.json` memakai `icon`, `adaptiveIcon`, dan splash lewat plugin `expo-splash-screen` (field `splash` tingkat atas lama dihapus). Aset: `assets/icon.png`, `adaptive-icon.png`, `splash.png`. Bila ikon tidak berubah setelah diganti: `npx expo prebuild --platform android --clean`, hapus aplikasi lama dari HP, lalu `npx expo run:android`.
+
+**3. Build rilis bertanda tangan (APK + AAB).**
+- `plugins/withReleaseSigning.js` menambahkan `signingConfigs.release` ke `android/app/build.gradle` saat prebuild, membaca `KEYSTORE_PATH`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` dari lingkungan. Tanpa `KEYSTORE_PATH`, build memakai debug keystore (untuk uji lokal; **jangan** diunggah ke Play Store).
+- Satu kali: buat keystore (`keytool -genkeypair -v -storetype PKCS12 -keystore release.keystore -alias budgetplanner -keyalg RSA -keysize 2048 -validity 10000`), ubah ke base64, lalu isi 4 Secrets di GitHub (Settings › Secrets and variables › Actions): `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. `*.keystore` dan `*.jks` ada di `.gitignore`.
+- **Simpan salinan keystore dan passwordnya di luar repo.** Bila hilang, aplikasi tidak bisa diperbarui di Play Store, dan bila SHA-1 berubah, Login Google gagal.
+- Daftarkan SHA-1 keystore di OAuth client Android (Google Cloud). Bila memakai Play App Signing, daftarkan juga SHA-1 *App signing key certificate* dari Play Console.
+- Workflow membuat dua artifact: `budget-planner-apk` dan `budget-planner-aab`. Naikkan `android.versionCode` di `app.json` setiap rilis ke Play.
+
+**4. Hapus akun & semua data** (Profil › *Hapus akun & semua data*). Urutan: konfirmasi → semua file aplikasi di Google Drive dihapus **permanen** (`drive.removeAll`, tidak lewat Sampah) → izin aplikasi di akun Google dicabut (`revokeGoogle`) → semua data di HP dikosongkan. Bila penghapusan di Drive gagal (mis. tanpa internet), data di HP **tidak** diubah dan pengguna diminta mencoba lagi. Untuk Play Console (Data Safety), URL penghapusan akun cukup halaman Privacy Policy yang menjelaskan cara ini.
+
+**5. Sinkron lebih efisien.** Migrasi skema **v4** memasang trigger pada tabel `books`, `categories`, `transactions`, `recurring`, `recurring_log` yang menaikkan counter `meta 'data.rev'` pada setiap INSERT/UPDATE/DELETE dari kode mana pun. Pengecekan "ada perubahan?" kini hanya membandingkan dua angka (`data.rev` vs `drive.sync.rev`), tidak lagi menserialisasi seluruh database; snapshot hanya dibuat saat benar-benar mengunggah (sekali, dulu dua kali). Perubahan yang masuk saat unggah berlangsung tetap tercatat tertunda. Pemasangan lama (punya sidik jari lama, belum punya revisi) dibandingkan sekali dengan sidik jari lama lalu beralih ke revisi. Pembaruan dari v1.13.0 tidak mengubah data.
+
+**6. Perlindungan timpa antar-HP.** Sebelum menimpa file sinkron di Drive, aplikasi membaca `modifiedTime`-nya (1 panggilan API tambahan, `drive.info`) dan membandingkannya dengan yang diingat HP ini.
+- Beda = file diubah dari perangkat lain: sinkron otomatis berhenti dengan status *konflik* (tidak menimpa apa pun, tidak memakai panggilan API lagi), muncul notifikasi sekali, dan Profil menampilkan peringatan.
+- **Sinkronkan sekarang** menampilkan pilihan *Gabungkan* (data HP dan Drive disatukan, transaksi kembar dilewati), *Pakai Drive* (HP diganti isi Drive, salinan pengaman dibuat), atau *Pakai HP* (Drive ditimpa). Ketuk di luar kotak = batal.
+- Keluar akun saat konflik diperingatkan lebih dulu, jadi data tidak hilang diam-diam. File sinkron yang dihapus atau dibuang ke Sampah dianggap bukan konflik dan dibuat ulang.
+- Keterbatasan: konflik hanya terdeteksi saat HP hendak mengunggah; belum ada pengambilan pembaruan otomatis saat aplikasi dibuka.
+
+**7. Kunci aplikasi** (Profil › Keamanan). Memakai kunci layar milik HP (sidik jari / wajah, atau PIN / pola / kata sandi HP) lewat `expo-local-authentication`; sengaja tidak ada PIN terpisah (tidak ada PIN yang bisa terlupa atau tersimpan di aplikasi, batas percobaan ditangani Android).
+- Terkunci saat aplikasi dibuka, dan lagi setelah ditinggalkan ≥ 60 detik (`LOCK_GRACE_MS` di `lib/lock.js`). Saat terkunci, angka disembunyikan lagi dan panel yang terbuka ditutup. Tombol Back saat terkunci menutup aplikasi.
+- Sebelum dinyalakan, aplikasi memeriksa HP punya kunci layar dan meminta autentikasi sekali. Bila kunci layar HP dihapus belakangan, kunci aplikasi mati otomatis (agar tidak terkunci selamanya).
+- Pengaturan tersimpan di `meta cfg.lock` (tetap ada setelah keluar akun).
+- Keterbatasan: siapa pun yang tahu PIN HP bisa membuka aplikasi; pencegahan screenshot dan pratinjau di recent apps tidak ada (butuh kode native).
+- Modul native baru: **wajib build ulang** (tidak jalan di build lama). Instalasi: `npx expo install expo-local-authentication`; di `package.json` > `jest.moduleNameMapper` ditambahkan tiruan untuk pengujian.
+
+**Pengujian.** 12 suite, 307 tes; `npx expo export --platform android` berhasil.
+
+**Belum dikerjakan sebelum production.** Mengisi Web Client ID langsung di aplikasi (kolom di layar sambutan/Profil dipertahankan untuk pengembang), OAuth consent screen ke status *In production*, Privacy Policy dan formulir Data Safety, akun Play Console (akun personal baru: closed testing 12 tester selama 14 hari; cek aturan terbaru saat mendaftar).

@@ -1,6 +1,6 @@
 import { freshDb, cat, tx, rows } from './helpers/db';
 import {
-  rp, rpk, pct, ym, statusOf, colorFor, monthData, yearData, highlights, cek, expenseYear, expenseByCategory,
+  rp, rpk, pct, ym, statusOf, colorFor, monthData, yearData, highlights, cek, expenseYear, expenseByCategory, scopePrefix,
   WARN_AT, GREEN, ORANGE, RED, GRAY, MASK,
 } from '../lib/calc';
 import { addBook, db, renameCategory } from '../lib/db';
@@ -171,18 +171,53 @@ describe('yearData / highlights / pengeluaran', () => {
     expect(h).toMatchObject({ total: 0, avg: 0, hi: null, lo: null, plus: 0, minus: 0, tab: 0, rasio: 0 });
   });
 
-  test('expenseYear = Biaya + Tagihan + Pinjaman (tabungan bukan pengeluaran)', () => {
+  test('expenseYear = semua uang keluar: Biaya + Tagihan + Pinjaman + Investasi/Tabungan', () => {
     const e = expenseYear(2026);
     expect(e).toHaveLength(12);
-    expect(e[0]).toMatchObject({ biaya: 1000000, tagihan: 0, pinjaman: 0, total: 1000000, short: 'Jan' });
+    expect(e[0]).toMatchObject({ biaya: 1000000, tagihan: 0, pinjaman: 0, tab: 500000, total: 1500000, short: 'Jan' });
     expect(e[2].total).toBe(2800000);
+    // total pengeluaran = total keluar di yearData (yang juga mengurangi saldo)
+    yearData(2026).forEach((r, i) => expect(e[i].total).toBe(r.total));
   });
 
-  test('expenseByCategory: terbesar dulu, tanpa tabungan/pendapatan, tanpa tahun/bulan lain', () => {
+  test('expenseByCategory: terbesar dulu, termasuk tabungan, tanpa pendapatan, tanpa tahun/bulan lain', () => {
     const l = expenseByCategory(2026, 3);
     expect(l.map(x => [x.nama, x.value])).toEqual([['Cicilan', 2500000], ['Listrik', 300000]]);
-    expect(expenseByCategory(2026, 1).map(x => x.nama)).toEqual(['Makanan']);
+    expect(expenseByCategory(2026, 1).map(x => [x.jenis, x.nama])).toEqual([['Biaya', 'Makanan'], ['Investasi/Tabungan', 'Emas']]);
     expect(expenseByCategory(2026, 6)).toEqual([]);
+  });
+
+  test('buku kas yang hanya berisi pembelian emas (tanpa pemasukan) tetap terhitung di Pengeluaran', () => {
+    freshDb(); cat('Investasi/Tabungan', 'Emas');
+    tx('2026-05-02', 'Investasi/Tabungan', 'Emas', 1500000);
+    expect(expenseYear(2026)[4].total).toBe(1500000);
+    expect(expenseByCategory(2026, 5)).toEqual([{ jenis: 'Investasi/Tabungan', nama: 'Emas', value: 1500000, n: 1 }]);
+    expect(monthData(2026, 5).saldo).toBe(-1500000);
+  });
+
+  test('expenseByCategory per rentang: Tahun = semua bulan tahun itu, Semua = semua tahun; n = jumlah transaksi', () => {
+    const tahun = expenseByCategory(2026, 3, 'Tahun');
+    expect(tahun.map(x => [x.nama, x.value, x.n])).toEqual([['Cicilan', 2500000, 1], ['Makanan', 1000000, 1], ['Emas', 500000, 1], ['Listrik', 300000, 1]]);
+    expect(tahun.reduce((a, x) => a + x.value, 0)).toBe(expenseYear(2026).reduce((a, r) => a + r.total, 0)); // sama dengan "Total tahun"
+    const semua = expenseByCategory(2026, 3, 'Semua'); // termasuk Makanan 777 di 2025
+    expect(semua.find(x => x.nama === 'Makanan')).toMatchObject({ value: 1000777, n: 2 });
+    expect(expenseByCategory(2031, 1, 'Tahun')).toEqual([]);
+  });
+
+  test('scopePrefix', () => {
+    expect(scopePrefix(2026, 3, 'Bulan')).toBe('2026-03');
+    expect(scopePrefix(2026, 3, 'Tahun')).toBe('2026');
+    expect(scopePrefix(2026, 3, 'Semua')).toBe('');
+    expect(scopePrefix(2026, 3)).toBe('2026-03');
+  });
+
+  test('banyak pembelian kecil (tanpa batas baris): 600 transaksi dijumlahkan semuanya', () => {
+    freshDb(); cat('Investasi/Tabungan', 'Emas');
+    for (let i = 0; i < 600; i++) tx(`2026-${String((i % 12) + 1).padStart(2, '0')}-10`, 'Investasi/Tabungan', 'Emas', 10000 + i);
+    const r = expenseByCategory(2026, 1, 'Tahun');
+    expect(r).toHaveLength(1);
+    expect(r[0].n).toBe(600);
+    expect(r[0].value).toBe(600 * 10000 + (599 * 600) / 2);
   });
 });
 

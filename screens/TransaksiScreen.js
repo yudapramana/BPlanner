@@ -4,28 +4,36 @@ import { s, NAVY } from '../theme';
 import { Chips, MonthPicker } from '../components/ui';
 import { fromYmd } from '../components/DateField';
 import TxRow from '../components/TxRow';
-import { db, bid } from '../lib/db';
-import { JENIS, MONTHS, ym, rpk, GREEN, cek } from '../lib/calc';
+import { db, bid, txByPrefix } from '../lib/db';
+import { JENIS, MONTHS, ym, rpk, GREEN, cek, filterTx } from '../lib/calc';
 
 const DAYS = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
-const dayLabel = v => { const d = fromYmd(v); return `${DAYS[d.getDay()]}, ${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]}`; };
+const dayLabel = (v, withYear) => { const d = fromYmd(v); return `${DAYS[d.getDay()]}, ${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]}${withYear ? ` ${d.getFullYear()}` : ''}`; };
+const SCOPES = [['Bulan ini', 'Bulan'], ['Tahun ini', 'Tahun'], ['Semua waktu', 'Semua']];
+const LIMIT = 500; // batas baris yang DITAMPILKAN (daftar dirender utuh). Jumlah & total tetap dihitung dari semua transaksi.
 
 export default function TransaksiScreen({ y, m, setY, setM, tick, openForm, openRec }) {
   const [filter, setFilter] = useState('Semua');
+  const [kat, setKat] = useState('');
+  const [scope, setScope] = useState('Bulan');
   const [q, setQ] = useState('');
   const cats = useMemo(() => db.getAllSync('SELECT * FROM categories WHERE book_id=?', [bid()]), [tick]);
-  const list = useMemo(() => db.getAllSync('SELECT * FROM transactions WHERE book_id=? AND substr(tanggal,1,7)=? ORDER BY tanggal DESC,id DESC', [bid(), ym(y, m)]), [y, m, tick]);
+  const list = useMemo(() => db.getAllSync('SELECT * FROM transactions WHERE book_id=? AND substr(tanggal,1,7)=? ORDER BY tanggal DESC,id DESC', [bid(), ym(y, m)]), [y, m, tick]); // ringkasan bulan di kartu atas
   const masuk = list.filter(t => t.jenis === 'Pendapatan').reduce((a, t) => a + (t.nominal || 0), 0);
   const keluar = list.filter(t => t.jenis !== 'Pendapatan').reduce((a, t) => a + (t.nominal || 0), 0);
-  const shown = useMemo(() => {
-    const k = q.trim().toLowerCase();
-    return list.filter(t => (filter === 'Semua' || t.jenis === filter) && (!k || `${t.kategori} ${t.ket || ''}`.toLowerCase().includes(k)));
-  }, [list, filter, q]);
+  const base = useMemo(() => (scope === 'Bulan' ? list : txByPrefix(scope === 'Tahun' ? String(y) : '', -1)), [scope, list, y, tick]); // -1 = tanpa batas (SQLite)
+  const shown = useMemo(() => filterTx(base, { jenis: filter, kategori: kat, q }), [base, filter, kat, q]);
+  const katNames = useMemo(() => [...new Set(cats.filter(c => c.jenis === filter).map(c => c.nama))].sort((a, b) => a.localeCompare(b)), [cats, filter]);
   const days = useMemo(() => {
     const g = [];
-    shown.forEach(t => { const last = g[g.length - 1]; if (last && last.tanggal === t.tanggal) last.items.push(t); else g.push({ tanggal: t.tanggal, items: [t] }); });
+    shown.slice(0, LIMIT).forEach(t => { const last = g[g.length - 1]; if (last && last.tanggal === t.tanggal) last.items.push(t); else g.push({ tanggal: t.tanggal, items: [t] }); });
     return g;
   }, [shown]);
+  const pickJenis = v => { setFilter(v); setKat(''); };
+  const searching = !!q.trim() || filter !== 'Semua' || !!kat;
+  const filtering = searching || scope !== 'Bulan';
+  const sumIn = shown.filter(t => t.jenis === 'Pendapatan').reduce((a, t) => a + (t.nominal || 0), 0);
+  const sumOut = shown.filter(t => t.jenis !== 'Pendapatan').reduce((a, t) => a + (t.nominal || 0), 0);
 
   return (
     <ScrollView contentContainerStyle={[s.pad, { paddingBottom: 90 }]} keyboardShouldPersistTaps="handled">
@@ -50,14 +58,21 @@ export default function TransaksiScreen({ y, m, setY, setM, tick, openForm, open
           <Text style={{ color: NAVY, fontWeight: '800' }}>›</Text>
         </TouchableOpacity>
         <TextInput style={s.search} placeholder="🔍 Cari kategori atau keterangan…" value={q} onChangeText={setQ} />
-        <Chips items={['Semua', ...JENIS]} value={filter} onPick={setFilter} />
+        <Chips items={SCOPES.map(x => x[0])} value={SCOPES.find(x => x[1] === scope)[0]} onPick={v => setScope(SCOPES.find(x => x[0] === v)[1])} />
+        <Chips items={['Semua', ...JENIS]} value={filter} onPick={pickJenis} />
+        {filter !== 'Semua' && katNames.length > 0 ? <Chips items={['Semua kategori', ...katNames]} value={kat || 'Semua kategori'} onPick={v => setKat(v === 'Semua kategori' ? '' : v)} /> : null}
+        {filtering ? <Text style={[s.rv, { marginBottom: 6 }]}>{shown.length} transaksi  •  ↓ {rpk(sumIn)}  •  ↑ {rpk(sumOut)}{shown.length > LIMIT ? `  •  menampilkan ${LIMIT} terbaru` : ''}</Text> : null}
         {days.length === 0 ? (
-          <Text style={[s.rv, { textAlign: 'center', paddingVertical: 24 }]}>{list.length === 0 ? 'Belum ada transaksi bulan ini.\nKetuk tombol ＋ di tengah untuk mencatat.' : 'Tidak ada transaksi yang cocok.'}</Text>
+          <View style={{ alignItems: 'center', paddingVertical: 24 }}>
+            <Text style={[s.rv, { textAlign: 'center' }]}>{scope === 'Bulan' && list.length === 0 && !searching ? 'Belum ada transaksi bulan ini.\nKetuk tombol ＋ di tengah untuk mencatat.' : 'Tidak ada transaksi yang cocok.'}</Text>
+            {scope === 'Bulan' && searching ? (
+              <TouchableOpacity onPress={() => setScope('Semua')} style={{ marginTop: 10, padding: 8 }} accessibilityRole="button"><Text style={{ color: NAVY, fontWeight: '800', textDecorationLine: 'underline' }}>Cari di semua waktu</Text></TouchableOpacity>) : null}
+          </View>
         ) : days.map(g => {
           const out = g.items.filter(t => t.jenis !== 'Pendapatan').reduce((a, t) => a + (t.nominal || 0), 0);
           return (
             <View key={g.tanggal}>
-              <View style={s.dayH}><Text style={s.dayT}>{dayLabel(g.tanggal)}</Text>{out > 0 ? <Text style={s.dayS}>Keluar {rpk(out)}</Text> : null}</View>
+              <View style={s.dayH}><Text style={s.dayT}>{dayLabel(g.tanggal, scope !== 'Bulan')}</Text>{out > 0 ? <Text style={s.dayS}>Keluar {rpk(out)}</Text> : null}</View>
               {g.items.map(t => { const c = cek(t, cats); return <TxRow key={t.id} t={t} warn={c.startsWith('✔') ? '' : c} onPress={() => openForm(t)} />; })}
             </View>);
         })}

@@ -1,7 +1,7 @@
 import { freshDb, cat, tx, rows, count } from './helpers/db';
 import {
   db, inTx, addCategory, addCategories, renameCategory, deleteCategory, categoryUsage, categoryRecurring, findCategory,
-  addBook, updateBook, deleteBook, getBooks, getBook, setActiveBook, bid, bookSaldo, seedAll, seedStarter, wipeBook, meta, setMeta,
+  addBook, updateBook, deleteBook, getBooks, getBook, setActiveBook, bid, bookSaldo, seedStarter, wipeBook, meta, setMeta,
 } from '../lib/db';
 import { SEED_CATS } from '../lib/seed';
 import { starterNames } from '../lib/master';
@@ -141,13 +141,6 @@ describe('buku kas', () => {
     tx('2026-11-01', 'Pendapatan', 'Gaji', 1000); tx('2026-11-02', 'Biaya', 'M', 300); tx('2026-11-03', 'Investasi/Tabungan', 'Emas', 200); tx('2026-10-03', 'Biaya', 'M', 999);
     expect(bookSaldo(1, '2026-11')).toBe(500);
     expect(bookSaldo(1, '2026-12')).toBe(0);
-  });
-  test('seedAll mengisi ulang satu buku saja dan menghubungkan category_id', () => {
-    const b = addBook('B2', 'pribadi'); cat('Biaya', 'Punya Buku Lain', 1, b);
-    seedAll(1);
-    expect(count('categories', 'book_id=?', [b])).toBe(1);
-    expect(count('categories', 'book_id=1')).toBeGreaterThan(20);
-    expect(count('transactions', 'book_id=1 AND category_id IS NOT NULL')).toBeGreaterThan(15);
   });
 });
 

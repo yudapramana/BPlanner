@@ -1,9 +1,9 @@
 import { freshDb, cat, tx, rows, count } from './helpers/db';
 import * as fsMock from './helpers/expo-file-system';
-import { db, meta, setMeta, isLocalEmpty, resetAllData, updateBook, addBook, bid } from '../lib/db';
+import { db, meta, setMeta, isLocalEmpty, resetAllData, updateBook, addBook, bid, dataRev, setActiveBook, migrate } from '../lib/db';
 import { saveGoogleProfile } from '../lib/auth';
 import { buildSnapshot, clearAutoBackups } from '../lib/backup';
-import { makeSync, dataFingerprint, AUTO_PER_DAY, K } from '../lib/driveSync';
+import { makeSync, dataFingerprint, AUTO_PER_DAY, K, SyncConflict } from '../lib/driveSync';
 import { DriveError } from '../lib/drive';
 
 // Google Drive tiruan di memori: daftar file, unduh, dan simpan-sinkron (menimpa file sinkron yang sudah ada).
@@ -11,12 +11,14 @@ function fakeDrive() {
   let clock = 0; const files = []; const calls = [];
   const stamp = () => new Date(Date.UTC(2026, 10, 12, 8, 0, ++clock)).toISOString();
   const d = {
-    files, calls, failNext: null,
+    files, calls, failNext: null, onSave: null,
     async list() { calls.push('list'); return [...files].sort((a, b) => (a.modifiedTime < b.modifiedTime ? 1 : -1)).map(({ text, ...f }) => f); },
+    async info(id) { calls.push('info'); const f = files.find(x => x.id === id); if (!f) throw new DriveError('hilang', 'notfound', 404); const { text, ...r } = f; return r; },
     async download(id) { calls.push('download'); const f = files.find(x => x.id === id); if (!f) throw new DriveError('hilang', 'notfound', 404); return f.text; },
     async saveSync(text, props, knownId) {
       calls.push('saveSync:' + (knownId || '-'));
       if (d.failNext) { const e = d.failNext; d.failNext = null; throw e; }
+      if (d.onSave) d.onSave();
       let f = knownId && files.find(x => x.id === knownId); if (!f) f = files.find(x => x.kind === 'sync');
       if (f) { f.text = text; f.modifiedTime = stamp(); Object.assign(f, props); return { file: { id: f.id, modifiedTime: f.modifiedTime }, created: false }; }
       f = { id: 'f' + (files.length + 1), name: 'BudgetPlanner_Sinkron_Otomatis.json', kind: 'sync', createdTime: stamp(), modifiedTime: '', text, size: text.length, ...props }; f.modifiedTime = f.createdTime; files.push(f);
@@ -89,7 +91,7 @@ describe('sinkron otomatis', () => {
   });
   test('file sinkron dihapus dari Drive (404): memakai file baru lewat saveSync tanpa melempar', async () => {
     login(); seedA(); await sync.auto();
-    drive.files.length = 0; setMeta(K.hash, '');
+    drive.files.length = 0; setMeta(K.rev, '');
     // saveSync tiruan: id tak ditemukan -> membuat baru
     expect((await sync.auto()).status).toBe('ok'); expect(drive.files).toHaveLength(1);
   });
@@ -178,7 +180,7 @@ describe('alur lengkap: masuk -> catat -> keluar -> masuk lagi', () => {
     const want = dataFingerprint(); const items = count('transactions');
     expect((await sync.beforeLogout()).ok).toBe(true);
     resetAllData(); clearAutoBackups();
-    expect(isLocalEmpty()).toBe(true); expect(count('transactions')).toBe(0); expect(meta('profile.mode')).toBeNull(); expect(meta(K.hash)).toBeNull();
+    expect(isLocalEmpty()).toBe(true); expect(count('transactions')).toBe(0); expect(meta('profile.mode')).toBeNull(); expect(meta(K.rev)).toBeNull();
     // masuk lagi (akun sama)
     login(); const ask = jest.fn();
     const r = await sync.login({ ask }); expect(r.action).toBe('pull'); expect(ask).not.toHaveBeenCalled();
@@ -187,6 +189,105 @@ describe('alur lengkap: masuk -> catat -> keluar -> masuk lagi', () => {
   test('keluar tanpa perubahan baru tidak membuat file kedua di Drive', async () => {
     login(); seedA(); await sync.auto(); await sync.beforeLogout();
     expect(drive.files.filter(f => f.kind === 'sync')).toHaveLength(1);
+  });
+});
+
+describe('revisi data (B1): deteksi perubahan tanpa serialisasi', () => {
+  test('rev naik untuk INSERT/UPDATE/DELETE di semua tabel data, tidak untuk perubahan meta / buku aktif', () => {
+    const r0 = dataRev(); const id = cat('Biaya', 'Makanan', 100); expect(dataRev()).toBeGreaterThan(r0);
+    let r = dataRev(); tx('2026-11-01', 'Biaya', 'Makanan', 10, 'a'); expect(dataRev()).toBeGreaterThan(r);
+    r = dataRev(); db.runSync('UPDATE transactions SET nominal=11'); expect(dataRev()).toBeGreaterThan(r);
+    r = dataRev(); db.runSync('DELETE FROM transactions'); expect(dataRev()).toBeGreaterThan(r);
+    r = dataRev(); const b = addBook('Usaha', 'proyek'); expect(dataRev()).toBeGreaterThan(r);
+    r = dataRev(); db.runSync('UPDATE categories SET anggaran=5 WHERE id=?', [id]); expect(dataRev()).toBeGreaterThan(r);
+    r = dataRev(); db.runSync("INSERT INTO recurring_log(recurring_id,periode,status) VALUES(1,'2026-11','done')"); expect(dataRev()).toBeGreaterThan(r);
+    r = dataRev(); setActiveBook(b); setMeta('x', 1); setMeta('profile.nama', 'Z'); expect(dataRev()).toBe(r);
+  });
+  test('klausa konflik pernyataan luar (OR IGNORE / OR REPLACE) tidak membuat revisi terlewat', () => {
+    const r = dataRev(); db.runSync("INSERT OR IGNORE INTO books(nama,tipe,urut) VALUES('Z','pribadi',9)"); expect(dataRev()).toBeGreaterThan(r);
+    const r2 = dataRev(); db.runSync("INSERT OR REPLACE INTO books(id,nama,tipe,urut) VALUES(1,'Utama','pribadi',0)"); expect(dataRev()).toBeGreaterThan(r2);
+  });
+  test('migrasi v4 membuat 15 trigger dan aman dijalankan ulang (database v3 -> v4)', () => {
+    const n = () => db.getAllSync("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_rev_%'").length;
+    expect(n()).toBe(15);
+    db.getAllSync("SELECT name FROM sqlite_master WHERE type='trigger'").forEach(t => db.execSync(`DROP TRIGGER ${t.name}`));
+    db.execSync('PRAGMA user_version = 3'); expect(n()).toBe(0);
+    migrate(); expect(n()).toBe(15); migrate(); expect(n()).toBe(15);
+  });
+  test('auto() dan status() tidak membuat snapshot; snapshot hanya dibuat saat mengunggah', async () => {
+    login(); seedA(); await sync.auto();
+    const spy = jest.spyOn(require('../lib/backup'), 'buildSnapshot');
+    expect((await sync.auto()).status).toBe('same'); sync.status(); sync.status();
+    expect(spy).not.toHaveBeenCalled();
+    tx('2026-11-07', 'Biaya', 'Makanan', 1, 'z'); expect(sync.status().pending).toBe(true);
+    await sync.auto(); expect(spy).toHaveBeenCalledTimes(1); // satu kali (dulu dua: snapshot + sidik jari)
+    spy.mockRestore();
+  });
+  test('perubahan yang masuk SAAT unggah berlangsung tetap tertunda', async () => {
+    login(); seedA(); drive.onSave = () => { drive.onSave = null; tx('2026-11-08', 'Biaya', 'Makanan', 2, 'saat unggah'); };
+    expect((await sync.auto()).status).toBe('ok'); expect(sync.status().pending).toBe(true);
+    expect((await sync.auto()).status).toBe('ok'); expect(sync.status().pending).toBe(false);
+    expect(JSON.parse(drive.files[0].text).books[0].transaksi).toHaveLength(3);
+  });
+  test('pemasangan lama (hanya punya sidik jari): cocok -> tidak diunggah ulang; beda -> diunggah', async () => {
+    login(); seedA(); await sync.auto();
+    db.runSync("DELETE FROM meta WHERE k=?", [K.rev]); setMeta(K.hash, dataFingerprint());
+    expect((await sync.auto()).status).toBe('same'); expect(meta(K.rev)).not.toBeNull(); expect(meta(K.hash)).toBe('');
+    db.runSync("DELETE FROM meta WHERE k=?", [K.rev]); setMeta(K.hash, 'usang:1');
+    expect((await sync.auto()).status).toBe('ok');
+  });
+});
+
+describe('Drive diubah perangkat lain (B2)', () => {
+  const otherDevice = (extra = 'dari HP lain') => { // HP lain mengunggah: isi & modifiedTime berubah
+    const other = freshSnapshotWith(extra); const f = drive.files.find(x => x.kind === 'sync');
+    f.text = other; f.modifiedTime = '2026-11-12T23:00:00.000Z';
+  };
+  const freshSnapshotWith = ket => { const snap = buildSnapshot('all'); snap.books[0].transaksi.push({ tanggal: '2026-11-09', jenis: 'Biaya', kategori: 'Makanan', nominal: 7777, ket }); return JSON.stringify(snap); };
+
+  test('auto: Drive berubah dari HP lain -> TIDAK menimpa, status conflict, panggilan berikutnya tanpa API', async () => {
+    login(); seedA(); await sync.auto(); otherDevice();
+    const before = drive.files[0].text; tx('2026-11-10', 'Biaya', 'Makanan', 1, 'HP ini');
+    const r = await sync.auto(); expect(r.status).toBe('conflict'); expect(drive.files[0].text).toBe(before);
+    expect(sync.status().conflict).toBe(true); expect(sync.status().pending).toBe(true);
+    drive.calls.length = 0; expect((await sync.auto()).status).toBe('conflict'); expect(drive.calls).toEqual([]);
+  });
+  test('auto: Drive tidak berubah -> hanya 1 panggilan info tambahan sebelum saveSync', async () => {
+    login(); seedA(); await sync.auto(); tx('2026-11-10', 'Biaya', 'Makanan', 1, 'x'); drive.calls.length = 0;
+    expect((await sync.auto()).status).toBe('ok'); expect(drive.calls).toEqual(['info', 'saveSync:f1']);
+  });
+  test('syncNow tanpa ask -> SyncConflict; flag conflict menyala', async () => {
+    login(); seedA(); await sync.auto(); otherDevice(); tx('2026-11-10', 'Biaya', 'Makanan', 1, 'x');
+    await expect(sync.syncNow()).rejects.toBeInstanceOf(SyncConflict); expect(sync.status().conflict).toBe(true);
+  });
+  test("syncNow + ask 'local' -> HP menimpa Drive, flag konflik hilang, sinkron otomatis jalan lagi", async () => {
+    login(); seedA(); await sync.auto(); otherDevice(); tx('2026-11-10', 'Biaya', 'Makanan', 1, 'HP ini'); await sync.auto();
+    const ask = jest.fn(() => Promise.resolve('local')); const r = await sync.syncNow({ ask });
+    expect(ask).toHaveBeenCalledTimes(1); expect(r.action).toBe('push'); expect(sync.status().conflict).toBe(false);
+    expect(drive.files[0].text).not.toContain('dari HP lain'); expect(sync.status().pending).toBe(false);
+  });
+  test("syncNow + ask 'replace' -> HP diganti isi Drive; 'merge' -> digabung lalu menunggu unggah", async () => {
+    login(); seedA(); await sync.auto(); otherDevice(); tx('2026-11-10', 'Biaya', 'Makanan', 1, 'HP ini');
+    const r = await sync.syncNow({ ask: () => Promise.resolve('merge') }); expect(r.action).toBe('merge');
+    expect(count('transactions')).toBeGreaterThanOrEqual(4); expect(sync.status().pending).toBe(true); expect(sync.status().conflict).toBe(false);
+    expect((await sync.auto()).status).toBe('ok'); // hasil gabungan naik, tanpa konflik baru
+    otherDevice('lagi'); tx('2026-11-11', 'Biaya', 'Makanan', 3, 'lagi di HP');
+    const r2 = await sync.syncNow({ ask: () => Promise.resolve('replace') }); expect(r2.action).toBe('pull');
+    expect(rows("SELECT ket FROM transactions WHERE ket='lagi'")).toHaveLength(1); expect(rows("SELECT ket FROM transactions WHERE ket='lagi di HP'")).toHaveLength(0);
+    expect(sync.status().pending).toBe(false);
+  });
+  test('syncNow + ask dibatalkan -> tidak ada yang berubah, konflik tetap ada', async () => {
+    login(); seedA(); await sync.auto(); otherDevice(); tx('2026-11-10', 'Biaya', 'Makanan', 1, 'x'); const n = count('transactions'); const text = drive.files[0].text;
+    const r = await sync.syncNow({ ask: () => Promise.resolve(null) }); expect(r.action).toBe('cancel');
+    expect(count('transactions')).toBe(n); expect(drive.files[0].text).toBe(text);
+  });
+  test('keluar akun saat Drive diubah perangkat lain -> ok:false (aplikasi memperingatkan sebelum menghapus)', async () => {
+    login(); seedA(); await sync.auto(); otherDevice(); tx('2026-11-10', 'Biaya', 'Makanan', 1, 'x');
+    const r = await sync.beforeLogout(); expect(r.ok).toBe(false); expect(r.error).toBeInstanceOf(SyncConflict);
+  });
+  test('file sinkron dibuang ke Sampah / dihapus -> bukan konflik, dibuat ulang', async () => {
+    login(); seedA(); await sync.auto(); drive.files.length = 0; tx('2026-11-10', 'Biaya', 'Makanan', 1, 'x');
+    expect((await sync.auto()).status).toBe('ok'); expect(drive.files).toHaveLength(1);
   });
 });
 
