@@ -5,7 +5,7 @@
 - `screens/` — DashboardScreen (angka bisa disembunyikan lewat ikon mata), TransaksiScreen (daftar transaksi), ExpensesScreen (bar chart 12 bulan + donat per kategori), PengaturanScreen (tab "Anggaran") (kategori + backup), TransaksiFormScreen, BerulangScreen (daftar & form transaksi berulang + pengaturan pengingat)
 - `components/` — ui.js (Card, Btn, Chips, Prog, Section, MonthPicker pil ringkas), BarChart.js, Donut.js, EyeIcon.js, DateField.js (date picker), MasterSheet.js (pilih kategori dari master), BookSheet.js (Buku Kas), ErrorBoundary.js (pelindung kesalahan layar + layar pengganti), LockScreen.js (layar Kunci aplikasi)
 - `lib/` — db.js (SQLite, migrasi bernomor, kategori), seed.js (kategori umum untuk Template Import, anggaran Rp 0; tanpa data pribadi), master.js (master kategori 5 kelompok), calc.js (rumus), csv.js, backup.js (export/import CSV & JSON, backup otomatis), excel.js (.xlsx/CSV), files.js, recurring.js (transaksi berulang), reminders.js (notifikasi pengingat), errors.js (pembantu penanganan error), googleAuth.js / auth.js (login Google), drive.js / driveSync.js (Google Drive: cadangan & sinkron), lock.js (Kunci aplikasi)
-- `tests/` — pengujian otomatis (Jest): rumus, CSV, migrasi, backup/import, transaksi berulang, pengingat, ErrorBoundary. Lihat bagian Pengujian di bawah
+- `tests/` — pengujian otomatis (Jest): rumus, CSV, migrasi, backup/import, transaksi berulang, pengingat, ErrorBoundary, dan semua layar. Lihat bagian Pengujian di bawah
 - `plugins/withReleaseSigning.js` — config plugin: tanda tangan rilis dari variabel lingkungan (dipakai GitHub Actions)
 - `theme.js` — warna & style bersama
 
@@ -129,6 +129,7 @@ Tes juga dijalankan otomatis di GitHub Actions sebelum APK dibuild; bila ada yan
 | `driveDelete.test.js` | Hapus akun: semua file aplikasi di Drive dihapus permanen, Drive kosong, 404 dianggap sudah terhapus, error lain dilempar (penghapusan di HP dibatalkan) |
 | `lock.test.js` | Kunci aplikasi: pengaturan tersimpan dan tidak terhapus saat keluar akun, ketersediaan kunci layar HP, hasil autentikasi (berhasil/batal/error), penanda sibuk, batas waktu kunci ulang |
 | `errorBoundary.test.js` | ErrorBoundary merender komponen sungguhan: menangkap error, "Coba lagi", reset otomatis saat ganti tab/bulan/buku, bersarang, tombol cadangan |
+| `screens.test.js` | **Semua layar dirender dan dipakai seperti pengguna** (database sungguhan): Dashboard (saldo, sembunyikan angka), Transaksi (per hari, cari, filter, "Cari di semua waktu", 1.200+ baris), Form (validasi, simpan, tambah lagi, edit, hapus + urungkan, ulangi tiap bulan), Pengeluaran (cakupan Bulan/Tahun/Semua, Kas Emas), Anggaran (tambah/ganti nama/hapus kategori, kosongkan buku), Berulang (tambah, catat sekarang), Profil & Sambutan. Tiruan modul native ada di `tests/helpers/` (`react-native`, `react-native-svg`, safe-area, datetimepicker, expo-constants); pembantu `tests/helpers/screen.js` untuk render, ketuk, isi kolom, dan menjawab Alert |
 
 **Cara kerjanya.** `expo-sqlite` diganti (lewat `moduleNameMapper` di `package.json`) oleh `tests/helpers/expo-sqlite.js` yang menjalankan **SQLite asli** (sql.js, WASM, tanpa modul native), jadi SQL di `lib/*.js` benar-benar dieksekusi, bukan di-mock. Modul native lain (file system, share, document picker) diganti versi di memori. Tidak ada file di folder aplikasi (`lib/`, `screens/`, dst.) yang diubah demi pengujian.
 
@@ -213,3 +214,8 @@ Tes juga dijalankan otomatis di GitHub Actions sebelum APK dibuild; bila ada yan
 ## v1.15.1 — APK lebih kecil, pesan login lebih jelas
 - `plugins/withLeanRelease.js` kini dipasang di `app.json`. Build rilis hanya memuat kode native untuk HP ARM (`armeabi-v7a`, `arm64-v8a`; x86 untuk emulator PC dibuang) dan memakai R8 + shrink resources. Bila ada fitur yang rusak di APK rilis tetapi normal di `npx expo run:android`, hapus baris `"./plugins/withLeanRelease"` dari `app.json` lalu build ulang.
 - Pesan error login kode 10 menyebut penyebab yang paling sering: SHA-1 build belum terdaftar (lokal vs GitHub berbeda) dan OAuth client di project yang berbeda. Lihat tabel SHA-1 di bagian *Build APK*.
+
+## Tes layar & pemeriksaan dependensi (setelah v1.15.1)
+- `tests/screens.test.js`: 41 tes alur layar (lihat tabel Pengujian). Total 16 suite, 398 tes.
+- `npx expo install --check` dan `npx expo-doctor` bersih (expo 58.0.26, expo-file-system 58.0.14, expo-sqlite 58.0.18).
+- `npm audit`: `xlsx` 0.18.5 punya celah saat **membaca** file Excel (prototype pollution, ReDoS); aplikasi hanya **menulis** Excel, jadi tidak terdampak. Jangan pakai `xlsx` untuk membaca file dari pengguna tanpa memperbaruinya ke rilis SheetJS dari cdn.sheetjs.com. Temuan `minimatch` lewat `expo` hanya di alat build; "perbaikan" dari npm menurunkan Expo ke 52, jadi diabaikan.

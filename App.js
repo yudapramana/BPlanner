@@ -24,6 +24,7 @@ import BerulangScreen from './screens/BerulangScreen';
 import { processRecurring } from './lib/recurring';
 import { initNotifications, syncReminders, onReminderTap } from './lib/reminders';
 import ErrorBoundary, { ErrorFallback } from './components/ErrorBoundary';
+import TabStack from './components/TabStack';
 import LockScreen from './components/LockScreen';
 import { isLockEnabled, setLockEnabled, deviceLockAvailable, authenticate, authBusy, shouldLock, applyScreenPrivacy } from './lib/lock';
 import { reportError } from './lib/errors';
@@ -289,7 +290,6 @@ function Main() {
   }, [form, tab, profileOpen, recOpen, locked]);
 
   const P = { y, m, setY, setM, tick, hide, toggleHide: () => setHide(h => !h), goTab: setTab, openForm, profile, openProfile: () => setProfileOpen(true), notify, bump: () => setTick(t => t + 1), openRec: () => setRecOpen(true) };
-  const Screen = TABS[tab][2];
   return (
     <View style={{ flex: 1, backgroundColor: BG }}>
       <StatusBar style="dark" />
@@ -316,10 +316,9 @@ function Main() {
         </TouchableOpacity>
       </View>
       <View style={{ flex: 1 }}>
-        {/* Satu layar yang error tidak mematikan menu & pemilih buku; berpindah tab / bulan / buku kas mencoba render ulang */}
-        <ErrorBoundary label={`tab:${TABS[tab][0]}`} resetKeys={[tab, book.id, y, m, tick]} title={`Layar ${TABS[tab][0]} bermasalah`}>
-          {locked ? null : <Screen key={lockEpoch} {...P} />}
-        </ErrorBoundary>
+        {/* Tab yang pernah dibuka tetap terpasang agar pindah tab cepat (lihat components/TabStack.js).
+            Setiap tab punya pelindung error sendiri; berpindah tab / bulan / buku kas mencoba render ulang. */}
+        <TabStack tabs={TABS} tab={tab} props={P} resetKey={`${lockEpoch}|${book.id}`} locked={locked} />
       </View>
       {/* Menu bawah: 2 menu | slot tengah (tombol Transaksi menonjol) | 2 menu. Ikon di atas, label di bawah. */}
       <View style={[s.nav, { paddingBottom: insets.bottom + 4 }]}>
