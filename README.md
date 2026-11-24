@@ -1,4 +1,4 @@
-# Monthly Budget Planner (Android) v1.15.0 — Expo SDK 58
+# Monthly Budget Planner (Android) v1.15.1 — Expo SDK 58
 
 ## Struktur
 - `App.js` — navigasi bawah + state bulan/tahun; menjalankan pencatatan otomatis & penjadwalan pengingat (`refreshRecurring`)
@@ -19,6 +19,19 @@ Jalankan pengujian: `npm test` (lihat bagian Pengujian).
 
 ## Build APK
 Push ke GitHub (branch main/master) → tab Actions → Build APK → unduh artifact `budget-planner-apk` (APK) atau `budget-planner-aab` (AAB untuk Play Store). Penandatanganan rilis: lihat v1.14.0.
+
+### Login Google: dua SHA-1, dua OAuth client Android
+Build lokal dan APK dari GitHub ditandatangani kunci berbeda, jadi Google melihatnya sebagai dua aplikasi. Keduanya perlu OAuth client Android sendiri (package `com.yuda.budgetplanner`) di **project Google Cloud yang sama** dengan Web Client ID. Tanpa itu login gagal dengan kode **10** (DEVELOPER_ERROR).
+
+| Build | Keystore | SHA-1 |
+|---|---|---|
+| `npx expo run:android` (lokal) | `android/app/debug.keystore` | `5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25` |
+| APK/AAB dari GitHub Actions | keystore rilis (secret `KEYSTORE_BASE64`) | `91:00:A7:EB:94:09:63:79:85:DF:CC:D2:C2:6E:F2:1B:C7:70:67:D1` |
+| Play Store (bila nanti dipakai) | kunci Play App Signing | lihat Play Console › App integrity |
+
+Cek SHA-1 sebuah APK tanpa kata sandi: `apksigner verify --print-certs app-release.apk` (Android SDK build-tools). Keytool `-printcert -jarfile` tidak bisa membaca APK yang hanya bertanda tangan v2. Perubahan di Google Cloud bisa butuh sampai ±30 menit.
+
+**Cadangkan `release.keystore` beserta kata sandi dan alias-nya di luar laptop** (mis. Drive pribadi + flashdisk). Bila hilang, pembaruan tidak bisa dipasang di atas aplikasi yang sudah terpasang dan SHA-1 berubah.
 
 ## Backup & Restore
 Anggaran → (bagian bawah) Data & Backup:
@@ -196,3 +209,7 @@ Tes juga dijalankan otomatis di GitHub Actions sebelum APK dibuild; bila ada yan
 - Transaksi hasil transaksi berulang memakai uid tetap per (templat, bulan), sehingga bila dua HP sama-sama mencatatnya hasilnya tetap satu.
 - Format file backup tetap versi 1 (kolom `uid`, `upd`, `hapus` hanya tambahan; versi lama mengabaikannya).
 - Catatan: "paling baru" memakai jam HP. Catatan hapus disimpan 400 hari.
+
+## v1.15.1 — APK lebih kecil, pesan login lebih jelas
+- `plugins/withLeanRelease.js` kini dipasang di `app.json`. Build rilis hanya memuat kode native untuk HP ARM (`armeabi-v7a`, `arm64-v8a`; x86 untuk emulator PC dibuang) dan memakai R8 + shrink resources. Bila ada fitur yang rusak di APK rilis tetapi normal di `npx expo run:android`, hapus baris `"./plugins/withLeanRelease"` dari `app.json` lalu build ulang.
+- Pesan error login kode 10 menyebut penyebab yang paling sering: SHA-1 build belum terdaftar (lokal vs GitHub berbeda) dan OAuth client di project yang berbeda. Lihat tabel SHA-1 di bagian *Build APK*.

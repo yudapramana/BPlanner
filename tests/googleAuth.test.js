@@ -104,7 +104,8 @@ describe('izin Google Drive', () => {
     expect(await G.sessionActive()).toBe(true);
   });
   test('pesan DEVELOPER_ERROR mengarah ke Web Client ID', () => {
-    expect(G.authMessage({ code: '10', message: 'x' })).toMatch(/Web Client ID/);
+    const m = G.authMessage({ code: '10', message: 'x' });
+    expect(m).toMatch(/Web Client ID/); expect(m).toMatch(/SHA-1/); expect(m).toMatch(/project/); expect(m).toMatch(/\(10\)/);
   });
 });
 

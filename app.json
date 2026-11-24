@@ -3,12 +3,12 @@
     "name": "Monthly Budget Planner",
     "slug": "budget-planner",
     "icon": "./assets/icon.png",
-    "version": "1.15.0",
+    "version": "1.15.1",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "android": {
       "package": "com.yuda.budgetplanner",
-      "versionCode": 20,
+      "versionCode": 21,
       "permissions": [
         "POST_NOTIFICATIONS"
       ],
@@ -37,7 +37,8 @@
       ],
       "expo-status-bar",
       "@react-native-community/datetimepicker",
-      "./plugins/withReleaseSigning"
+      "./plugins/withReleaseSigning",
+      "./plugins/withLeanRelease"
     ]
   }
 }
