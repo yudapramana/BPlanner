@@ -20,6 +20,13 @@ Jalankan pengujian: `npm test` (lihat bagian Pengujian).
 ## Build APK
 Push ke GitHub (branch main/master) → tab Actions → Build APK → unduh artifact `budget-planner-apk` (APK) atau `budget-planner-aab` (AAB untuk Play Store). Penandatanganan rilis: lihat v1.14.0.
 
+### Rilis versi baru (otomatis)
+1. Naikkan `version` di `app.json` dan `package.json`, serta `android.versionCode` (+1), lalu commit dan push ke master.
+2. Buat dan push tag yang sama persis dengan versinya: `git tag -a v1.17.0 -m "v1.17.0"` lalu `git push origin v1.17.0`.
+3. Actions menjalankan tes dan build, lalu membuat **GitHub Release** "Budget Planner v1.17.0" dengan lampiran `budget-planner-v1.17.0.apk` dan `.aab`, plus catatan rilis otomatis dari daftar commit. Build gagal bila tag tidak sama dengan versi di `app.json`.
+
+Push master dan tag sekaligus menjalankan dua build (satu untuk master, satu untuk tag); yang membuat Release hanya build tag.
+
 ### Login Google: dua SHA-1, dua OAuth client Android
 Build lokal dan APK dari GitHub ditandatangani kunci berbeda, jadi Google melihatnya sebagai dua aplikasi. Keduanya perlu OAuth client Android sendiri (package `com.yuda.budgetplanner`) di **project Google Cloud yang sama** dengan Web Client ID. Tanpa itu login gagal dengan kode **10** (DEVELOPER_ERROR).
 
