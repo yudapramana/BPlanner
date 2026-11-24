@@ -8,6 +8,7 @@
     "userInterfaceStyle": "light",
     "android": {
       "package": "com.yuda.budgetplanner",
+      "allowBackup": false,
       "versionCode": 22,
       "permissions": [
         "POST_NOTIFICATIONS"

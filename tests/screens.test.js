@@ -373,6 +373,14 @@ describe('ProfileScreen', () => {
     expect(t).toContain('uji@contoh.id'); expect(t).toContain('Terhubung dengan Google');
     expect(t).toContain(require('../app.json').expo.version);
   });
+  test('tautan Kebijakan Privasi membuka halaman GitHub Pages (juga tanpa akun)', () => {
+    const RN = require('react-native');
+    const spy = jest.spyOn(RN.Linking, 'openURL');
+    const r = render(<ProfileScreen {...p} profile={null} />);
+    press(r, 'Kebijakan Privasi');
+    expect(spy).toHaveBeenCalledWith('https://yudapramana.github.io/BPlanner/privasi.html');
+    spy.mockRestore();
+  });
   test('ubah nama tampilan; nama kosong ditolak', () => {
     const onRename = jest.fn();
     const r = render(<ProfileScreen {...p} profile={prof} onRename={onRename} sync={{}} />);

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, StyleSheet, Switch, Platform } from 'react-native';
+import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert, StyleSheet, Switch, Platform, Linking } from 'react-native';
 import Constants from 'expo-constants';
 import Avatar from '../components/Avatar';
 import GoogleButton from '../components/GoogleButton';
@@ -11,6 +11,8 @@ import { getWebClientId, maskClientId } from '../lib/googleAuth';
 import { fmtWaktu } from '../components/DriveSheet';
 import { recentErrors, buildErrorReport } from '../lib/errors';
 import { writeCache, shareFile } from '../lib/files';
+
+export const PRIVACY_URL = 'https://yudapramana.github.io/BPlanner/privasi.html'; // docs/privasi.html lewat GitHub Pages
 
 const tgl = v => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v || ''); return m ? `${+m[3]} ${MONTHS[+m[2] - 1]} ${m[1]}` : '-'; };
 
@@ -144,6 +146,7 @@ export default function ProfileScreen({ profile, onClose, onLogin, onLogout, onD
           <Text style={st.h}>Tentang aplikasi</Text>
           <View style={st.row}><Text style={st.k}>Versi</Text><Text style={st.v}>{version}</Text></View>
           <TouchableOpacity onPress={() => run('report', shareReport).catch(e => Alert.alert('Laporan gagal dibuat', String((e && e.message) || e)))} disabled={!!act} style={st.rep} accessibilityRole="button"><Text style={st.repT}>Bagikan laporan error</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => Linking.openURL(PRIVACY_URL).catch(() => Alert.alert('Tidak bisa membuka', PRIVACY_URL))} style={st.rep} accessibilityRole="link"><Text style={st.repT}>Kebijakan Privasi</Text></TouchableOpacity>
         </View>
 
         {profile && (

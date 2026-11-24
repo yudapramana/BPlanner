@@ -225,7 +225,7 @@ Tes juga dijalankan otomatis di GitHub Actions sebelum APK dibuild; bila ada yan
 ## Tes layar & pemeriksaan dependensi (setelah v1.15.1)
 - `tests/screens.test.js`: 41 tes alur layar (lihat tabel Pengujian). Total 16 suite, 398 tes.
 - `npx expo install --check` dan `npx expo-doctor` bersih (expo 58.0.26, expo-file-system 58.0.14, expo-sqlite 58.0.18).
-- `npm audit`: `xlsx` 0.18.5 punya celah saat **membaca** file Excel (prototype pollution, ReDoS); aplikasi hanya **menulis** Excel, jadi tidak terdampak. Jangan pakai `xlsx` untuk membaca file dari pengguna tanpa memperbaruinya ke rilis SheetJS dari cdn.sheetjs.com. Temuan `minimatch` lewat `expo` hanya di alat build; "perbaikan" dari npm menurunkan Expo ke 52, jadi diabaikan.
+- `xlsx` dipasang dari CDN resmi SheetJS (`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`), bukan dari npm: versi npm berhenti di 0.18.5 dan punya celah saat membaca file (prototype pollution, ReDoS). Untuk memperbarui: `npm i --save https://cdn.sheetjs.com/xlsx-<versi>/xlsx-<versi>.tgz` (versi terbaru: cdn.sheetjs.com). Sisa temuan `npm audit` (`glob`/`minimatch` lewat `expo`) hanya di alat build; "perbaikan" dari npm menurunkan Expo ke 52, jadi diabaikan.
 
 ## v1.16.0 — Tab Anggaran baru + halaman Data & Cadangan
 - **Kenapa:** tab Anggaran dulu memuat 2 kolom isian per kategori (±100 kolom). Di HP kelas bawah (Helio P35) menggambar kolom sebanyak itu butuh 600–800 ms per frame setiap kali masuk/keluar tab. Ini kerja thread UI Android, jadi tidak ikut cepat di APK rilis.
@@ -234,3 +234,9 @@ Tes juga dijalankan otomatis di GitHub Actions sebelum APK dibuild; bila ada yan
 - `components/TabStack.js`: tab yang pernah dibuka tetap terpasang; tab tersembunyi tidak dirender ulang; tab tampil hanya dirender ulang bila datanya berubah.
 - Hasil ukur di HP vivo 1938 (build dev, `dumpsys gfxinfo`, frame terlambat terburuk): masuk/keluar Anggaran 600–800 ms → 133–300 ms.
 
+## Setelah v1.16.0 — persiapan Play Store, SheetJS resmi
+- **Play Store:** panduan lengkap di `store/PLAY-STORE.md` (GitHub Pages, Data safety, content rating, teks listing, screenshot, Play App Signing + SHA-1). Grafis di `store/grafis/`. Halaman publik di `docs/` (`privasi.html`, `hapus-akun.html`) dipasang lewat GitHub Pages (Settings › Pages › master /docs).
+- Profil punya tautan **Kebijakan Privasi** (`PRIVACY_URL` di `screens/ProfileScreen.js`).
+- **Hapus akun** kini juga menghapus file aplikasi yang sudah ada di **Sampah Drive** (cadangan lama), dan mengulang daftar sampai kosong (hingga 1000 file). Dulu cadangan lama di Sampah tersisa sampai Google mengosongkannya (30 hari).
+- `android.allowBackup: false`: Android Auto Backup tidak lagi menyalin database ke cadangan Google. Cadangan resmi lewat sinkron Google Drive / Export. Ini juga mencegah database lama dipulihkan otomatis lalu bentrok dengan sinkron.
+- `xlsx` dari CDN resmi SheetJS 0.20.3 (lihat catatan `npm audit` di atas).
