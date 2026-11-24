@@ -3,12 +3,12 @@
     "name": "Monthly Budget Planner",
     "slug": "budget-planner",
     "icon": "./assets/icon.png",
-    "version": "1.15.1",
+    "version": "1.16.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "android": {
       "package": "com.yuda.budgetplanner",
-      "versionCode": 21,
+      "versionCode": 22,
       "permissions": [
         "POST_NOTIFICATIONS"
       ],
