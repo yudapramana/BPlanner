@@ -1,4 +1,4 @@
-# Monthly Budget Planner (Android) v1.16.0 — Expo SDK 58
+# Monthly Budget Planner (Android) v1.16.1 — Expo SDK 58
 
 ## Struktur
 - `App.js` — navigasi bawah + state bulan/tahun; menjalankan pencatatan otomatis & penjadwalan pengingat (`refreshRecurring`)
@@ -234,7 +234,7 @@ Tes juga dijalankan otomatis di GitHub Actions sebelum APK dibuild; bila ada yan
 - `components/TabStack.js`: tab yang pernah dibuka tetap terpasang; tab tersembunyi tidak dirender ulang; tab tampil hanya dirender ulang bila datanya berubah.
 - Hasil ukur di HP vivo 1938 (build dev, `dumpsys gfxinfo`, frame terlambat terburuk): masuk/keluar Anggaran 600–800 ms → 133–300 ms.
 
-## Setelah v1.16.0 — persiapan Play Store, SheetJS resmi
+## v1.16.1 — persiapan Play Store, SheetJS resmi, hapus akun lebih tuntas
 - **Play Store:** panduan lengkap di `store/PLAY-STORE.md` (GitHub Pages, Data safety, content rating, teks listing, screenshot, Play App Signing + SHA-1). Grafis di `store/grafis/`. Halaman publik di `docs/` (`privasi.html`, `hapus-akun.html`) dipasang lewat GitHub Pages (Settings › Pages › master /docs).
 - Profil punya tautan **Kebijakan Privasi** (`PRIVACY_URL` di `screens/ProfileScreen.js`).
 - **Hapus akun** kini juga menghapus file aplikasi yang sudah ada di **Sampah Drive** (cadangan lama), dan mengulang daftar sampai kosong (hingga 1000 file). Dulu cadangan lama di Sampah tersisa sampai Google mengosongkannya (30 hari).

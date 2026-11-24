@@ -84,6 +84,8 @@ Gratis, tanpa iklan, tanpa langganan.
 | Feature graphic | 1024 × 500 PNG/JPG | `store/grafis/feature-graphic-1024x500.png` |
 | Screenshot HP | minimal 2, disarankan 4–8; sisi 320–3840 px, rasio maks 2:1 | Lihat bagian 5 |
 
+Kontak developer (Store settings › Store listing contact details): email **pramanayuda772@gmail.com**, website https://yudapramana.github.io/BPlanner/.
+
 Kategori: **Finance**. Tag: budget, pengeluaran, keuangan pribadi.
 
 ## 5. Screenshot tanpa data pribadi
