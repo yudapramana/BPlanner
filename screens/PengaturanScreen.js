@@ -1,39 +1,47 @@
-import React, { useState, useMemo, useRef } from 'react';
-import { View, Text, ScrollView, TextInput, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useMemo } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet } from 'react-native';
 import { s, NAVY, GCOL } from '../theme';
 import { Btn, Section } from '../components/ui';
-import { db, wipeBook, bid, getBook, addCategories, addCategory, renameCategory, deleteCategory, categoryUsage, categoryRecurring } from '../lib/db';
+import { db, bid, getBook, meta, setMeta, addCategories, addCategory, renameCategory, deleteCategory, categoryUsage, categoryRecurring } from '../lib/db';
 import { countRecurring } from '../lib/recurring';
 import MasterSheet from '../components/MasterSheet';
+import CategorySheet from '../components/CategorySheet';
 import { masterCount } from '../lib/master';
-import { JENIS, rp, GREEN, RED } from '../lib/calc';
-import { exportBackup, exportAllBooks, exportExcelFull, shareTemplate, pickAndRead, inspectImport, runImport, autoBackup, latestAutoBackup, shareAutoBackup } from '../lib/backup';
-import { failAlert } from '../lib/excel';
-import { backupToDrive, listDriveBackups, fetchDriveBackup, lastDriveBackup } from '../lib/driveBackup';
-import DriveSheet, { fmtWaktu } from '../components/DriveSheet';
-import useKeyboard from '../lib/useKeyboard';
+import { JENIS, rp, rpk } from '../lib/calc';
 
-export default function PengaturanScreen({ tick, bump, notify, profile, openProfile, openRec }) {
+// Tab Anggaran: daftar kategori per kelompok sebagai baris TEKS (tanpa kolom isian), kelompok bisa dilipat.
+// Mengedit / menambah lewat lembar CategorySheet (2 kolom isian, hanya saat terbuka). Dulu setiap kategori punya
+// 2 kolom isian yang selalu aktif (±100 kolom), dan itu membuat pindah ke/dari tab ini lambat di HP kelas bawah.
+// Cadangan / import / kosongkan buku ada di halaman Data & Cadangan (screens/DataScreen.js).
+const OPEN_KEY = 'cfg.anggaran.open'; // kelompok yang terbuka (pengaturan perangkat)
+const readOpen = () => { const v = meta(OPEN_KEY); return v == null ? ['Biaya'] : v.split('|').filter(j => JENIS.includes(j)); };
+const OUT = ['Biaya', 'Tagihan', 'Pinjaman', 'Investasi/Tabungan'];
+
+export default function PengaturanScreen({ y, m, tick, bump, notify, openRec, openData }) {
   const cats = useMemo(() => db.getAllSync('SELECT * FROM categories WHERE book_id=? ORDER BY urut,id', [bid()]), [tick]);
-  const [nw, setNw] = useState({});
-  const [driveBusy, setDriveBusy] = useState(null); // 'backup' | 'restore' | null
-  const [sheet, setSheet] = useState({ open: false, loading: false, items: [], error: '' });
+  const recN = useMemo(() => countRecurring(), [tick]);
+  const [open, setOpen] = useState(readOpen);
   const [pickJ, setPickJ] = useState(null); // kelompok yang sedang membuka panel Master
-  const [rev, setRev] = useState(0); // dinaikkan untuk memaksa kolom nama/anggaran kembali ke nilai di database (mis. setelah ganti nama ditolak)
-  const scroller = useRef(null);
-  const { wrapRef, overlap, ensure, onScroll } = useKeyboard(scroller, 0);
+  const [edit, setEdit] = useState(null); // { jenis, cat } ; cat null = tambah baru
 
-  const sumBud = js => cats.filter(c => js.includes(c.jenis)).reduce((a, c) => a + c.anggaran, 0);
-  const rename = (c, v) => {
-    const r = renameCategory(c.id, v);
-    if (r === 'kembar') Alert.alert('Nama sudah dipakai', `Sudah ada kategori "${v.trim()}" di kelompok ${c.jenis}. Gunakan nama lain.`);
-    if (r === 'ok') bump(); else if (r !== 'sama') setRev(x => x + 1); // ditolak / kosong: kembalikan isi kolom ke nama lama
-  };
-  const setBud = (c, v) => { db.runSync('UPDATE categories SET anggaran=? WHERE id=?', [parseInt(v.replace(/\D/g, ''), 10) || 0, c.id]); bump(); };
-  const add = j => {
-    const n = (nw[j] || '').trim(); if (!n) return;
-    if (addCategory(j, n) == null) return Alert.alert('Sudah ada', n);
-    setNw({ ...nw, [j]: '' }); bump();
+  const byJ = useMemo(() => Object.fromEntries(JENIS.map(j => [j, cats.filter(c => c.jenis === j)])), [cats]);
+  const sumOf = js => js.reduce((a, j) => a + byJ[j].reduce((b, c) => b + (c.anggaran || 0), 0), 0);
+  const inc = sumOf(['Pendapatan']), out = sumOf(OUT), sisa = inc - out;
+
+  const toggle = j => setOpen(o => { const n = o.includes(j) ? o.filter(x => x !== j) : [...o, j]; setMeta(OPEN_KEY, n.join('|')); return n; });
+
+  const saveCat = ({ nama, anggaran }) => {
+    const { jenis, cat } = edit;
+    const dup = () => { Alert.alert('Nama sudah dipakai', `Sudah ada kategori "${nama}" di kelompok ${jenis}. Gunakan nama lain.`); return false; };
+    if (!cat) {
+      if (addCategory(jenis, nama, anggaran) == null) return dup();
+      bump(); notify && notify(`✔ Kategori ${nama} ditambahkan`); return true;
+    }
+    const r = renameCategory(cat.id, nama);
+    if (r === 'kembar') return dup();
+    if (r === 'kosong') return false;
+    if (anggaran !== (cat.anggaran || 0)) db.runSync('UPDATE categories SET anggaran=? WHERE id=?', [anggaran, cat.id]);
+    bump(); notify && notify(`✔ ${nama} disimpan`); return true;
   };
   const addFromMaster = names => {
     const j = pickJ; setPickJ(null);
@@ -44,7 +52,7 @@ export default function PengaturanScreen({ tick, bump, notify, profile, openProf
     const u = categoryUsage(c.id);
     const rc = categoryRecurring(c.id);
     const rcNote = rc > 0 ? `\n\n🔁 ${rc} transaksi berulang untuk kategori ini ikut dihapus (jadwal ke depannya berhenti).` : '';
-    const done = withTx => { deleteCategory(c.id, withTx); bump(); notify && notify(withTx ? `Kategori & ${u.n} transaksi dihapus` : 'Kategori dihapus'); };
+    const done = withTx => { deleteCategory(c.id, withTx); setEdit(null); bump(); notify && notify(withTx ? `Kategori & ${u.n} transaksi dihapus` : 'Kategori dihapus'); };
     if (u.n === 0) return Alert.alert('Hapus kategori?', c.nama + rcNote, [{ text: 'Batal', style: 'cancel' }, { text: 'Hapus', style: 'destructive', onPress: () => done(false) }]);
     Alert.alert(`Hapus "${c.nama}"?`,
       `${u.n} transaksi (total ${rp(u.total)}) memakai kategori ini.\n\n• Hapus kategori saja: transaksi tetap ada tetapi tanpa kategori, dan tidak ikut terhitung di Dashboard sampai Anda memilihkan kategori lewat Edit.\n• Hapus beserta transaksi: ${u.n} transaksi itu ikut dihapus permanen.${rcNote}`, [
@@ -52,131 +60,85 @@ export default function PengaturanScreen({ tick, bump, notify, profile, openProf
         { text: 'Hapus kategori saja', onPress: () => done(false) },
         { text: `Hapus + ${u.n} transaksi`, style: 'destructive', onPress: () => done(true) }]);
   };
-  // Aplikasi dimulai kosong, jadi tidak ada lagi "data awal Excel" untuk dipulihkan; tombol ini mengosongkan buku kas yang sedang aktif.
-  const reset = () => Alert.alert('Kosongkan buku kas ini?', `Semua kategori, anggaran, transaksi, dan transaksi berulang di buku kas \"${getBook().nama}\" dihapus. Buku kas lain tidak terpengaruh.\n\nSalinan backup dibuat otomatis lebih dulu.`, [{ text: 'Batal', style: 'cancel' }, { text: 'Kosongkan', style: 'destructive', onPress: async () => {
-    try { await autoBackup('active'); } catch (e) { return Alert.alert('Dibatalkan', 'Backup otomatis gagal dibuat, data tidak diubah.\n' + String((e && e.message) || e)); }
-    wipeBook(bid()); bump();
-  } }]);
-
-  const finish = async (ins, replace) => {
-    try {
-      const { kind, res: r, backup } = await runImport(ins, replace); bump();
-      const body = kind === 'json'
-        ? `Buku kas diproses: ${r.buku} (baru: ${r.bukuBaru})\nKategori diproses: ${r.kat} (baru: ${r.katBaru})\nTransaksi masuk: ${r.tx}${r.rec ? `\nTransaksi berulang baru: ${r.rec}` : ''}\nTransaksi kembar dilewati: ${r.dobel}${r.ubah ? `\nDiperbarui (versi file lebih baru): ${r.ubah}` : ''}${r.hapus ? `\nDihapus (sudah dihapus di HP lain): ${r.hapus}` : ''}${r.terhapus ? `\nDilewati (sudah Anda hapus di HP ini): ${r.terhapus}` : ''}\nBaris tidak valid/dilewati: ${r.lewat}`
-        : `Kategori diproses: ${r.kat} (baru: ${r.katBaru})\nTransaksi masuk: ${r.tx}\nTransaksi kembar dilewati: ${r.dobel}\nBaris tidak valid/dilewati: ${r.lewat}`;
-      Alert.alert('Import selesai', body + (backup ? `\n\nData lama sudah disalin otomatis (${backup.name}).` : ''),
-        backup ? [{ text: 'OK' }, { text: 'Simpan salinan data lama', onPress: () => shareAutoBackup(backup).catch(failAlert('Gagal')) }] : [{ text: 'OK' }]);
-    } catch (e) { Alert.alert('Import gagal', String((e && e.message) || e)); }
-  };
-  const askImport = ins => { // dipakai import file maupun pemulihan dari Drive; belum ada data yang diubah di sini
-      const bk = getBook().nama;
-      if (ins.kind === 'json') {
-        const n = db.getFirstSync('SELECT COUNT(*) c FROM books').c;
-        Alert.alert('Import backup semua buku', `File berisi ${ins.info.buku} buku kas, ${ins.info.kat} kategori, ${ins.info.tx} transaksi.\n\nGabung: buku kas bernama sama digabung (transaksi kembar dilewati), buku lain ditambahkan.\nGanti Semua: SEMUA ${n} buku kas di aplikasi ini dihapus lalu diganti isi file. Salinan data lama dibuat otomatis lebih dulu.`, [
-          { text: 'Batal', style: 'cancel' }, { text: 'Gabung', onPress: () => finish(ins, false) }, { text: 'Ganti Semua', style: 'destructive', onPress: () => finish(ins, true) }]);
-      } else {
-        Alert.alert('Import dari file CSV', `File berisi ${ins.info.kat} baris kategori dan ${ins.info.tx} baris transaksi, masuk ke buku kas "${bk}".\n\nGabung: tambahkan data file ke data yang ada (transaksi kembar dilewati).\nGanti Semua: hapus semua data buku kas ini lalu isi dari file. Transaksi berulang buku kas ini ikut terhapus dan tidak bisa dikembalikan dari file CSV. Salinan data lama dibuat otomatis lebih dulu.`, [
-          { text: 'Batal', style: 'cancel' }, { text: 'Gabung', onPress: () => finish(ins, false) }, { text: 'Ganti Semua', style: 'destructive', onPress: () => finish(ins, true) }]);
-      }
-  };
-  const doImport = async () => {
-    try {
-      const text = await pickAndRead(); if (text == null) return;
-      askImport(inspectImport(text)); // validasi dulu
-    } catch (e) { Alert.alert('Import gagal', String((e && e.message) || e)); }
-  };
-
-  // ---- Google Drive ----
-  const msg = e => String((e && e.message) || e);
-  const needLogin = () => {
-    if (profile) return false;
-    Alert.alert('Masuk dulu', 'Cadangan ke Google Drive memakai akun Google Anda. Masuk lewat ikon profil di kanan atas.', [{ text: 'Batal', style: 'cancel' }, { text: 'Buka Profil', onPress: () => openProfile && openProfile() }]);
-    return true;
-  };
-  const doBackupDrive = async () => {
-    if (driveBusy || needLogin()) return;
-    setDriveBusy('backup');
-    try { const r = await backupToDrive(); bump(); notify && notify(`✔ Tercadangkan ke Drive: ${r.info.buku} buku kas, ${r.info.tx} transaksi`); }
-    catch (e) { Alert.alert('Cadangan gagal', msg(e)); }
-    finally { setDriveBusy(null); }
-  };
-  const openRestore = async () => {
-    if (driveBusy || needLogin()) return;
-    setSheet({ open: true, loading: true, items: [], error: '' });
-    try { setSheet({ open: true, loading: false, items: await listDriveBackups(), error: '' }); }
-    catch (e) { setSheet({ open: true, loading: false, items: [], error: msg(e) }); }
-  };
-  const pickRestore = async f => {
-    setSheet(x => ({ ...x, open: false }));
-    setDriveBusy('restore');
-    try { askImport(inspectImport(await fetchDriveBackup(f.id))); }
-    catch (e) { Alert.alert('Pemulihan gagal', msg(e)); }
-    finally { setDriveBusy(null); }
-  };
-  const lastDrive = lastDriveBackup();
-
-  const shareLastAuto = () => { const b = latestAutoBackup(); if (!b) return Alert.alert('Belum ada', 'Backup otomatis dibuat setiap kali Anda memakai Ganti Semua atau Kosongkan Buku Kas.'); shareAutoBackup(b).catch(failAlert('Gagal')); };
 
   return (
-    <View ref={wrapRef} collapsable={false} style={{ flex: 1 }}>
-    <ScrollView ref={scroller} onScroll={onScroll} scrollEventThrottle={16} contentContainerStyle={[s.pad, { paddingBottom: 30 + overlap }]} keyboardShouldPersistTaps="handled">
+    <View style={{ flex: 1 }}>
+    <ScrollView contentContainerStyle={[s.pad, { paddingBottom: 90 }]}>
       {/* Ringkasan rencana anggaran bulanan */}
       <View style={[s.hero, { backgroundColor: NAVY }]}>
         <Text style={[s.heroL, { marginTop: 2 }]}>Rencana anggaran per bulan • {getBook().nama}</Text>
         <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
           <View style={s.hp}>
             <Text style={s.hpL}>↓ PEMASUKAN</Text>
-            <Text style={s.hpV} numberOfLines={1} adjustsFontSizeToFit>{rp(sumBud(['Pendapatan']))}</Text>
+            <Text style={s.hpV} numberOfLines={1} adjustsFontSizeToFit>{rp(inc)}</Text>
           </View>
           <View style={s.hp}>
             <Text style={s.hpL}>↑ PENGELUARAN</Text>
-            <Text style={s.hpV} numberOfLines={1} adjustsFontSizeToFit>{rp(sumBud(['Biaya', 'Tagihan', 'Pinjaman', 'Investasi/Tabungan']))}</Text>
+            <Text style={s.hpV} numberOfLines={1} adjustsFontSizeToFit>{rp(out)}</Text>
           </View>
         </View>
+        <Text style={[s.heroP, { marginTop: 10 }]}>{sisa >= 0 ? `Sisa rencana: ${rp(sisa)}` : `Rencana defisit: ${rp(sisa)}`}</Text>
       </View>
-      <Text style={[s.cardS, { marginHorizontal: 4 }]}>Ubah nama / anggaran lalu tekan selesai di keyboard. Anggaran berlaku sama untuk semua bulan.</Text>
-      {JENIS.map(j => (
-        <Section key={j} title={j.toUpperCase()}>
-          {cats.filter(c => c.jenis === j).map(c => (
-            <View key={c.id + '|' + rev + '|' + c.nama + '|' + c.anggaran} style={s.row}>
-              <TextInput style={[s.in, { flex: 1.4 }]} onFocus={ensure} defaultValue={c.nama} onEndEditing={e => rename(c, e.nativeEvent.text)} />
-              <TextInput style={[s.in, { flex: 1 }]} onFocus={ensure} keyboardType="numeric" defaultValue={String(c.anggaran)} onEndEditing={e => setBud(c, e.nativeEvent.text)} />
-              <TouchableOpacity onPress={() => remove(c)}><Text style={{ color: RED, fontSize: 20, paddingHorizontal: 6 }}>✕</Text></TouchableOpacity>
-            </View>))}
-          {cats.every(c => c.jenis !== j) && <Text style={[s.cardS, { marginVertical: 6 }]}>Belum ada kategori {j}. Pilih dari Master agar tidak perlu mengetik dari awal.</Text>}
-          <View style={s.row}>
-            <TextInput style={[s.in, { flex: 1 }]} onFocus={ensure} placeholder="Kategori baru..." value={nw[j] || ''} onChangeText={v => setNw({ ...nw, [j]: v })} />
-            <Btn small t="+ Tambah" onPress={() => add(j)} />
-          </View>
-          <Btn t={`📚 Pilih dari Master (${masterCount(j)} pilihan)`} color={GCOL[j]} onPress={() => setPickJ(j)} />
-          <Text style={[s.rn, { fontWeight: '700', marginTop: 10 }]}>TOTAL ANGGARAN {rp(cats.filter(c => c.jenis === j).reduce((a, c) => a + c.anggaran, 0))}</Text>
-        </Section>))}
+      <Text style={[s.cardS, { marginHorizontal: 4 }]}>Ketuk kategori untuk mengubah nama atau anggarannya. Anggaran berlaku sama untuk semua bulan.</Text>
+
+      {JENIS.map(j => {
+        const list = byJ[j], on = open.includes(j), col = GCOL[j] || NAVY;
+        return (
+          <View key={j} style={s.sec}>
+            <TouchableOpacity onPress={() => toggle(j)} style={st.gHead} accessibilityRole="button" accessibilityState={{ expanded: on }} accessibilityLabel={`${j}, ${list.length} kategori, total ${rp(sumOf([j]))}. Ketuk untuk ${on ? 'melipat' : 'membuka'}`}>
+              <Text style={[st.gArrow, { color: col }]}>{on ? '▼' : '►'}</Text>
+              <Text style={st.gTitle} numberOfLines={1}>{j.toUpperCase()}</Text>
+              <Text style={st.gSum} numberOfLines={1}>{list.length} kategori • {rpk(sumOf([j]))}</Text>
+            </TouchableOpacity>
+            {on ? (
+              <View style={{ marginTop: 6 }}>
+                {list.map(c => (
+                  <TouchableOpacity key={c.id} onPress={() => setEdit({ jenis: j, cat: c })} style={st.row} activeOpacity={0.6} accessibilityRole="button"
+                    accessibilityLabel={`${c.nama}, ${c.anggaran > 0 ? rp(c.anggaran) : 'belum diatur'}. Ketuk untuk mengubah`}>
+                    <View style={[st.dot, { backgroundColor: col }]} />
+                    <Text style={st.name} numberOfLines={1}>{c.nama}</Text>
+                    <Text style={[st.amt, !(c.anggaran > 0) && st.none]} numberOfLines={1}>{c.anggaran > 0 ? rp(c.anggaran) : 'belum diatur'}</Text>
+                    <Text style={st.chev}>›</Text>
+                  </TouchableOpacity>))}
+                {list.length === 0 ? <Text style={[s.cardS, { marginVertical: 6 }]}>Belum ada kategori {j}. Pilih dari Master agar tidak perlu mengetik dari awal.</Text> : null}
+                <View style={st.actions}>
+                  <TouchableOpacity style={[st.act, { borderColor: col }]} onPress={() => setEdit({ jenis: j, cat: null })} accessibilityRole="button"><Text style={[st.actT, { color: col }]}>＋ Tambah kategori</Text></TouchableOpacity>
+                  <TouchableOpacity style={[st.act, { borderColor: col }]} onPress={() => setPickJ(j)} accessibilityRole="button"><Text style={[st.actT, { color: col }]}>📚 Dari Master ({masterCount(j)})</Text></TouchableOpacity>
+                </View>
+              </View>) : null}
+          </View>);
+      })}
+
       <Section title="Transaksi Berulang & Pengingat">
         <Text style={s.rn}>Catat sekali tagihan tetap (cicilan, uang kos, internet, SPP), lalu muncul tiap bulan dengan pengingat jatuh tempo. Pengingat memuat peringatan 80% dan 100% dari anggaran kategorinya.</Text>
-        <Text style={[s.rv, { marginTop: 6 }]}>{countRecurring() > 0 ? `${countRecurring()} transaksi berulang aktif di buku kas ini.` : 'Belum ada transaksi berulang.'}</Text>
+        <Text style={[s.rv, { marginTop: 6 }]}>{recN > 0 ? `${recN} transaksi berulang aktif di buku kas ini.` : 'Belum ada transaksi berulang.'}</Text>
         <Btn t="🔁 Kelola Transaksi Berulang" onPress={() => openRec && openRec()} />
       </Section>
-      <Section title="Cadangan Google Drive">
-        <Text style={s.rn}>Setelah masuk dengan Google, perubahan data otomatis disinkronkan ke satu file di Google Drive Anda (lihat status di Profil). Tombol di bawah membuat cadangan bertanggal tambahan secara manual: 10 terbaru disimpan, yang lebih lama dipindah ke Sampah Drive. Pulihkan bisa memakai file sinkron otomatis maupun cadangan manual.</Text>
-        <Text style={[s.rv, { marginTop: 6 }]}>{lastDrive ? `Cadangan manual terakhir: ${fmtWaktu(lastDrive.time)}${lastDrive.buku ? ` • ${lastDrive.buku} buku kas • ${lastDrive.tx} transaksi` : ''}` : 'Belum pernah membuat cadangan manual ke Drive.'}</Text>
-        {!profile ? <Text style={[s.rv, { marginTop: 4, color: '#e17055' }]}>Perlu masuk dengan Google (ikon profil di kanan atas).</Text> : null}
-        <Btn t={driveBusy === 'backup' ? 'Mengunggah…' : '☁ Cadangkan ke Google Drive'} color="#2e86de" onPress={doBackupDrive} />
-        <Btn t={driveBusy === 'restore' ? 'Mengunduh…' : '☁ Pulihkan dari Google Drive'} color="#1d6f42" onPress={openRestore} />
-      </Section>
-      <DriveSheet visible={sheet.open} loading={sheet.loading} error={sheet.error} items={sheet.items} onPick={pickRestore} onClose={() => setSheet(x => ({ ...x, open: false }))} />
 
-      <Section title={`Data & Backup • ${getBook().nama}`}>
-        <Text style={s.rn}>Backup CSV menyimpan kategori, anggaran, dan transaksi buku kas yang sedang aktif. Backup JSON menyimpan SEMUA buku kas dalam satu file, cocok untuk pindah HP. Simpan file itu (Drive/WhatsApp), lalu Import di HP baru; Import mengenali CSV atau JSON otomatis.</Text>
-        <Btn t="⬆ Export Backup Buku Ini (CSV)" onPress={() => exportBackup().catch(failAlert('Export gagal'))} />
-        <Btn t="🗂 Export Backup Semua Buku (JSON)" color="#2e86de" onPress={() => exportAllBooks().then(c => notify && notify(`✔ ${c.buku} buku kas, ${c.tx} transaksi`)).catch(failAlert('Export gagal'))} />
-        <Btn t="⬇ Import dari File (CSV / JSON)" color={GREEN} onPress={doImport} />
-        <Btn t="🕘 Simpan Backup Otomatis Terakhir" color="#636e72" onPress={shareLastAuto} />
-        <Btn t="📄 Download Template Import" color="#636e72" onPress={() => shareTemplate().catch(failAlert('Gagal'))} />
-        <Btn t="📊 Export Semua Data ke Excel (.xlsx)" color="#1d6f42" onPress={() => exportExcelFull().catch(failAlert('Export gagal'))} />
-      </Section>
-      <Btn t="🗑 Kosongkan Buku Kas Ini" color="#d63031" onPress={reset} />
+      <TouchableOpacity style={[s.sec, st.dataCard]} onPress={() => openData && openData()} activeOpacity={0.7} accessibilityRole="button" accessibilityLabel="Data dan Cadangan: backup, import, Google Drive, kosongkan buku kas">
+        <View style={{ flex: 1 }}>
+          <Text style={s.secT}>💾 Data & Cadangan</Text>
+          <Text style={s.rv}>Backup, import, Google Drive, Excel, kosongkan buku kas</Text>
+        </View>
+        <Text style={st.chev}>›</Text>
+      </TouchableOpacity>
     </ScrollView>
-    <MasterSheet visible={!!pickJ} jenis={pickJ || JENIS[0]} existing={cats.filter(c => c.jenis === pickJ).map(c => c.nama)} onClose={() => setPickJ(null)} onSubmit={addFromMaster} />
+    <MasterSheet visible={!!pickJ} jenis={pickJ || JENIS[0]} existing={pickJ ? byJ[pickJ].map(c => c.nama) : []} onClose={() => setPickJ(null)} onSubmit={addFromMaster} />
+    <CategorySheet visible={!!edit} jenis={edit ? edit.jenis : JENIS[0]} cat={edit ? edit.cat : null} y={y} m={m} onClose={() => setEdit(null)} onSave={saveCat} onDelete={remove} />
     </View>
   );
 }
+
+const st = StyleSheet.create({
+  gHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 2 },
+  gArrow: { fontSize: 12, width: 14 }, gTitle: { fontSize: 14, fontWeight: '800', color: NAVY, flexShrink: 0 },
+  gSum: { flex: 1, textAlign: 'right', fontSize: 12, fontWeight: '700', color: '#636e72' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 11, borderBottomWidth: 1, borderColor: '#f0f3f6' },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  name: { flex: 1, fontSize: 14, color: '#2d3436', fontWeight: '600' },
+  amt: { fontSize: 14, fontWeight: '800', color: '#2d3436' }, none: { color: '#a4adb7', fontWeight: '600', fontSize: 12.5 },
+  chev: { fontSize: 20, color: '#a4adb7', marginLeft: 2 },
+  actions: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  act: { flex: 1, borderWidth: 1.5, borderRadius: 14, paddingVertical: 9, alignItems: 'center' }, actT: { fontSize: 12.5, fontWeight: '800' },
+  dataCard: { flexDirection: 'row', alignItems: 'center' },
+});

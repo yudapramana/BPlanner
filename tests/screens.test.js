@@ -1,6 +1,6 @@
 // Uji layar: setiap layar dirender dengan database sungguhan (sql.js) lalu dipakai seperti pengguna:
 // ketuk tombol, isi kolom, jawab dialog. Yang diperiksa: teks di layar, isi database, dan callback ke App.
-import { act, render, renderAsync, rerender, allText, texts, press, pressAsync, pressables, input, type, lastAlert, clearAlerts, pressAlert } from './helpers/screen';
+import { act, render, renderAsync, rerender, allText, texts, press, pressAsync, pressables, inputs, input, type, lastAlert, clearAlerts, pressAlert } from './helpers/screen';
 import { freshDb, cat, tx, rows, count } from './helpers/db';
 import { addBook, setActiveBook, bid } from '../lib/db';
 import { toYmd } from '../components/DateField';
@@ -9,6 +9,7 @@ import TransaksiScreen from '../screens/TransaksiScreen';
 import TransaksiFormScreen from '../screens/TransaksiFormScreen';
 import ExpensesScreen from '../screens/ExpensesScreen';
 import PengaturanScreen from '../screens/PengaturanScreen';
+import DataScreen from '../screens/DataScreen';
 import BerulangScreen from '../screens/BerulangScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import WelcomeScreen from '../screens/WelcomeScreen';
@@ -222,51 +223,106 @@ describe('ExpensesScreen', () => {
 });
 
 // ============================================================ Anggaran (Pengaturan)
-describe('PengaturanScreen', () => {
-  const addInput = (r, i) => r.root.findAll(n => n.type === 'TextInput' && n.props.placeholder === 'Kategori baru...')[i];
-  test('tambah kategori baru ke kelompok Biaya; nama kembar ditolak', () => {
+describe('PengaturanScreen (tab Anggaran)', () => {
+  const row = n => new RegExp(`^${n.replace('/', '\\/')},`); // baris / judul kelompok dicari lewat label aksesibilitas: "Makan, Rp 1.000.000. Ketuk..."
+  const sheetOpen = r => inputs(r).length > 0;
+  test('daftar tanpa kolom isian: kategori tampil sebagai teks, hanya kelompok Biaya terbuka di awal', () => {
     const r = render(<PengaturanScreen {...p} />);
-    act(() => { addInput(r, 1).props.onChangeText('Pulsa'); });
-    press(r, '+ Tambah', 1);
-    expect(rows("SELECT jenis FROM categories WHERE nama='Pulsa'")).toEqual([{ jenis: 'Biaya' }]); expect(p.bump).toHaveBeenCalled();
-    act(() => { addInput(r, 1).props.onChangeText('Makan'); });
-    press(r, '+ Tambah', 1);
-    expect(lastAlert().title).toBe('Sudah ada');
+    expect(inputs(r)).toHaveLength(0);
+    const t = allText(r);
+    expect(t).toContain('Makan'); expect(t).toContain('Rp 1.000.000'); expect(t).toContain('Transport');
+    expect(t).not.toContain('Gaji'); // Pendapatan terlipat
+    expect(t).toContain('1 kategori • Rp 5 jt'); // ringkasan kelompok terlipat tetap terlihat
+    expect(t).toContain('Sisa rencana: Rp 3.700.000'); // 5.000.000 − (1.000.000 + 300.000)
   });
-  test('ubah anggaran lewat kolom angka (selesai mengetik)', () => {
+  test('anggaran Rp 0 ditulis "belum diatur"', () => {
     const r = render(<PengaturanScreen {...p} />);
-    const bud = r.root.findAll(n => n.type === 'TextInput' && n.props.defaultValue === '1000000')[0];
-    act(() => { bud.props.onEndEditing({ nativeEvent: { text: '1.250.000' } }); });
+    press(r, row('Investasi/Tabungan'));
+    expect(allText(r)).toContain('Emas'); expect(allText(r)).toContain('belum diatur');
+  });
+  test('kelompok yang dibuka/dilipat diingat saat layar dibuka lagi', () => {
+    const r = render(<PengaturanScreen {...p} />);
+    press(r, row('Pendapatan')); press(r, row('Biaya'));
+    const r2 = render(<PengaturanScreen {...p} />);
+    expect(allText(r2)).toContain('Gaji'); expect(allText(r2)).not.toContain('Transport');
+  });
+  test('ketuk kategori -> lembar edit (2 kolom isian) dengan info pemakaian; ubah anggaran lalu Simpan', () => {
+    const r = render(<PengaturanScreen {...p} />);
+    press(r, row('Makan'));
+    expect(inputs(r)).toHaveLength(2);
+    expect(input(r, 'Nama kategori').props.value).toBe('Makan'); expect(input(r, 'Anggaran per bulan').props.value).toBe('1.000.000');
+    expect(allText(r)).toContain('Terpakai November 2026:'); expect(allText(r)).toContain('(7% dari anggaran di atas) | Rp 65.000');
+    expect(allText(r)).toContain('2 transaksi memakai kategori ini');
+    type(r, 'Anggaran per bulan', '1.250.000'); press(r, 'Simpan');
     expect(rows("SELECT anggaran FROM categories WHERE nama='Makan'")[0].anggaran).toBe(1250000);
+    expect(p.notify).toHaveBeenCalledWith('✔ Makan disimpan'); expect(sheetOpen(r)).toBe(false);
   });
-  test('ganti nama ke nama yang sudah ada ditolak dengan pesan', () => {
+  test('ganti nama ke nama yang sudah ada ditolak; lembar tetap terbuka dan data tidak berubah', () => {
     const r = render(<PengaturanScreen {...p} />);
-    const nm = r.root.findAll(n => n.type === 'TextInput' && n.props.defaultValue === 'Transport')[0];
-    act(() => { nm.props.onEndEditing({ nativeEvent: { text: 'Makan' } }); });
+    press(r, row('Transport'));
+    type(r, 'Nama kategori', 'makan'); press(r, 'Simpan');
     expect(lastAlert().title).toBe('Nama sudah dipakai');
-    expect(count('categories', "nama='Transport'")).toBe(1);
+    expect(sheetOpen(r)).toBe(true); expect(count('categories', "nama='Transport'")).toBe(1);
   });
-  test('hapus kategori yang dipakai: pilihan "kategori saja" atau "+ transaksi"', () => {
+  test('ganti nama ikut memperbarui transaksinya', () => {
     const r = render(<PengaturanScreen {...p} />);
-    const idx = rows('SELECT nama FROM categories WHERE book_id=1 ORDER BY urut,id').findIndex(c => c.nama === 'Makan');
-    press(r, '✕', idx);
+    press(r, row('Makan')); type(r, 'Nama kategori', 'Makan & Minum'); press(r, 'Simpan');
+    expect(count('transactions', "kategori='Makan & Minum'")).toBe(2);
+  });
+  test('tambah kategori baru dengan anggarannya sekaligus; nama kosong / kembar ditolak', () => {
+    const r = render(<PengaturanScreen {...p} />);
+    press(r, '＋ Tambah kategori');
+    expect(allText(r)).toContain('Tambah kategori • Biaya');
+    press(r, 'Simpan'); expect(allText(r)).toContain('Isi nama kategori');
+    type(r, 'Nama kategori', 'Makan'); press(r, 'Simpan'); expect(lastAlert().title).toBe('Nama sudah dipakai');
+    type(r, 'Nama kategori', 'Pulsa'); press(r, '+50rb'); press(r, '+50rb'); press(r, 'Simpan');
+    expect(rows("SELECT jenis,anggaran FROM categories WHERE nama='Pulsa'")).toEqual([{ jenis: 'Biaya', anggaran: 100000 }]);
+    expect(sheetOpen(r)).toBe(false);
+  });
+  test('menutup lembar dengan perubahan belum disimpan meminta konfirmasi; tanpa perubahan langsung tertutup', () => {
+    const r = render(<PengaturanScreen {...p} />);
+    press(r, row('Makan')); press(r, 'Tutup'); expect(sheetOpen(r)).toBe(false); // tanpa perubahan
+    press(r, row('Makan')); press(r, '+100rb'); clearAlerts(); press(r, 'Tutup');
+    expect(lastAlert().title).toBe('Buang perubahan?');
+    pressAlert('Lanjut edit'); expect(sheetOpen(r)).toBe(true);
+    press(r, 'Tutup'); pressAlert('Buang'); expect(sheetOpen(r)).toBe(false);
+    expect(rows("SELECT anggaran FROM categories WHERE nama='Makan'")[0].anggaran).toBe(1000000);
+  });
+  test('hapus dari lembar edit: pilihan "kategori saja" atau "+ transaksi"; Batal membiarkan lembar terbuka', () => {
+    const r = render(<PengaturanScreen {...p} />);
+    press(r, row('Makan')); press(r, '🗑  Hapus kategori');
     expect(lastAlert().title).toBe('Hapus "Makan"?'); expect(lastAlert().message).toContain('2 transaksi (total Rp 65.000)');
-    pressAlert('Hapus + 2 transaksi');
+    pressAlert('Batal'); expect(sheetOpen(r)).toBe(true);
+    press(r, '🗑  Hapus kategori'); pressAlert('Hapus + 2 transaksi');
     expect(count('categories', "nama='Makan'")).toBe(0); expect(count('transactions', "kategori='Makan'")).toBe(0);
+    expect(sheetOpen(r)).toBe(false);
   });
+  test('kartu Data & Cadangan membuka halamannya', () => {
+    const openData = jest.fn();
+    const r = render(<PengaturanScreen {...p} openData={openData} />);
+    press(r, /^Data dan Cadangan/); expect(openData).toHaveBeenCalled();
+  });
+});
+
+// ============================================================ Data & Cadangan
+describe('DataScreen', () => {
   test('kosongkan buku kas: konfirmasi, backup otomatis dulu, lalu data buku ini terhapus', async () => {
-    const r = render(<PengaturanScreen {...p} />);
-    press(r, /Kosongkan/);
+    const r = render(<DataScreen {...p} />);
+    press(r, /Kosongkan Buku Kas/);
     expect(lastAlert().title).toBe('Kosongkan buku kas ini?');
     const ok = lastAlert().buttons.find(b => b.text === 'Kosongkan');
     await act(async () => { await ok.onPress(); });
     expect(count('transactions', 'book_id=1')).toBe(0); expect(count('categories', 'book_id=1')).toBe(0);
   });
   test('cadangan Drive tanpa login: diminta masuk dulu', async () => {
-    const r = render(<PengaturanScreen {...p} profile={null} />);
+    const r = render(<DataScreen {...p} profile={null} />);
     await pressAsync(r, /Cadangkan ke Google Drive/);
     expect(lastAlert().title).toBe('Masuk dulu');
     pressAlert('Buka Profil'); expect(p.openProfile).toHaveBeenCalled();
+  });
+  test('tombol Kembali menutup halaman', () => {
+    const r = render(<DataScreen {...p} />);
+    press(r, 'Kembali'); expect(p.onClose).toHaveBeenCalled();
   });
 });
 

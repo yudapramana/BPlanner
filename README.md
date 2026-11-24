@@ -219,3 +219,11 @@ Tes juga dijalankan otomatis di GitHub Actions sebelum APK dibuild; bila ada yan
 - `tests/screens.test.js`: 41 tes alur layar (lihat tabel Pengujian). Total 16 suite, 398 tes.
 - `npx expo install --check` dan `npx expo-doctor` bersih (expo 58.0.26, expo-file-system 58.0.14, expo-sqlite 58.0.18).
 - `npm audit`: `xlsx` 0.18.5 punya celah saat **membaca** file Excel (prototype pollution, ReDoS); aplikasi hanya **menulis** Excel, jadi tidak terdampak. Jangan pakai `xlsx` untuk membaca file dari pengguna tanpa memperbaruinya ke rilis SheetJS dari cdn.sheetjs.com. Temuan `minimatch` lewat `expo` hanya di alat build; "perbaikan" dari npm menurunkan Expo ke 52, jadi diabaikan.
+
+## Tab Anggaran baru + halaman Data & Cadangan
+- **Kenapa:** tab Anggaran dulu memuat 2 kolom isian per kategori (±100 kolom). Di HP kelas bawah (Helio P35) menggambar kolom sebanyak itu butuh 600–800 ms per frame setiap kali masuk/keluar tab. Ini kerja thread UI Android, jadi tidak ikut cepat di APK rilis.
+- **Sekarang:** kategori tampil sebagai baris teks; 5 kelompok bisa dilipat (yang terbuka diingat di `meta cfg.anggaran.open`, bawaan: Biaya). Ketuk baris membuka `components/CategorySheet.js` (nama, anggaran + tombol cepat, info terpakai bulan yang dilihat & jumlah transaksi, Simpan, Hapus). Tambah kategori memakai lembar yang sama, langsung dengan anggarannya. Menutup lembar dengan perubahan belum disimpan meminta konfirmasi.
+- Cadangan Google Drive, backup/import CSV/JSON, Excel, template, backup otomatis, dan Kosongkan Buku Kas pindah ke `screens/DataScreen.js` (kartu "Data & Cadangan" di bawah tab Anggaran).
+- `components/TabStack.js`: tab yang pernah dibuka tetap terpasang; tab tersembunyi tidak dirender ulang; tab tampil hanya dirender ulang bila datanya berubah.
+- Hasil ukur di HP vivo 1938 (build dev, `dumpsys gfxinfo`, frame terlambat terburuk): masuk/keluar Anggaran 600–800 ms → 133–300 ms.
+

@@ -21,6 +21,7 @@ import { autoBackup, clearAutoBackups } from './lib/backup';
 import ClientIdSheet from './components/ClientIdSheet';
 import { fmtWaktu } from './components/DriveSheet';
 import BerulangScreen from './screens/BerulangScreen';
+import DataScreen from './screens/DataScreen';
 import { processRecurring } from './lib/recurring';
 import { initNotifications, syncReminders, onReminderTap } from './lib/reminders';
 import ErrorBoundary, { ErrorFallback } from './components/ErrorBoundary';
@@ -58,6 +59,7 @@ function Main() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [welcome, setWelcome] = useState(() => !welcomeDone()); // layar sambutan sekali saja
   const [recOpen, setRecOpen] = useState(false); // halaman Transaksi Berulang
+  const [dataOpen, setDataOpen] = useState(false); // halaman Data & Cadangan (dari tab Anggaran)
   const [clientOpen, setClientOpen] = useState(false); // panel input Google Web Client ID
   const [cfgTick, setCfgTick] = useState(0); // dinaikkan setiap Web Client ID berubah
   const [sessionOk, setSessionOk] = useState(null); // null = belum diperiksa; false = sesi Google terputus
@@ -282,14 +284,15 @@ function Main() {
       if (locked) { BackHandler.exitApp(); return true; }
       if (form) { setForm(null); return true; }
       if (recOpen) { setRecOpen(false); return true; }
+      if (dataOpen) { setDataOpen(false); return true; }
       if (profileOpen) { setProfileOpen(false); return true; }
       if (tab !== 0) { setTab(0); return true; }
       return false;
     });
     return () => sub.remove();
-  }, [form, tab, profileOpen, recOpen, locked]);
+  }, [form, tab, profileOpen, recOpen, dataOpen, locked]);
 
-  const P = { y, m, setY, setM, tick, hide, toggleHide: () => setHide(h => !h), goTab: setTab, openForm, profile, openProfile: () => setProfileOpen(true), notify, bump: () => setTick(t => t + 1), openRec: () => setRecOpen(true) };
+  const P = { y, m, setY, setM, tick, hide, toggleHide: () => setHide(h => !h), goTab: setTab, openForm, profile, openProfile: () => setProfileOpen(true), notify, bump: () => setTick(t => t + 1), openRec: () => setRecOpen(true), openData: () => setDataOpen(true) };
   return (
     <View style={{ flex: 1, backgroundColor: BG }}>
       <StatusBar style="dark" />
@@ -360,6 +363,14 @@ function Main() {
         <View style={{ position: 'absolute', top: insets.top, left: 0, right: 0, bottom: 0, backgroundColor: BG }}>
           <ErrorBoundary label="berulang" onReset={() => setRecOpen(false)} retryLabel="Tutup" title="Transaksi berulang bermasalah">
             <BerulangScreen tick={tick} bump={P.bump} notify={notify} onClose={() => setRecOpen(false)} />
+          </ErrorBoundary>
+        </View>)}
+
+      {/* Halaman Data & Cadangan: backup, import, Google Drive, kosongkan buku kas */}
+      {dataOpen && (
+        <View style={{ position: 'absolute', top: insets.top, left: 0, right: 0, bottom: 0, backgroundColor: BG }}>
+          <ErrorBoundary label="data" onReset={() => setDataOpen(false)} retryLabel="Tutup" title="Halaman Data & Cadangan bermasalah">
+            <DataScreen tick={tick} bump={P.bump} notify={notify} profile={profile} openProfile={() => { setDataOpen(false); setProfileOpen(true); }} onClose={() => setDataOpen(false)} />
           </ErrorBoundary>
         </View>)}
 
